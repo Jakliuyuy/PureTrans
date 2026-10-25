@@ -184,51 +184,82 @@ fun MainScreen(
                 }
             }
 
-            // 2. 原文输入卡片 (仿 Google 翻译大圆角紧凑自适应设计)
+            // 2. 原文输入卡片 (极简紧凑自适应：单行时紧贴一行高度约56dp，多行时自适应平滑向下扩展)
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(28.dp),
+                shape = RoundedCornerShape(24.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerLow
             ) {
-                Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    val isMultiLine = uiState.inputText.contains('\n') || uiState.inputText.length > 40
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Top
+                        verticalAlignment = if (isMultiLine) Alignment.Top else Alignment.CenterVertically
                     ) {
-                        Box(modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = if (uiState.inputText.isNotEmpty()) 8.dp else 0.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
                             if (uiState.inputText.isEmpty()) {
                                 Text(
                                     text = "输入文本...",
-                                    fontSize = 22.sp,
+                                    fontSize = 20.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                    lineHeight = 28.sp
+                                    lineHeight = 26.sp
                                 )
                             }
                             BasicTextField(
                                 value = uiState.inputText,
                                 onValueChange = onInputTextChanged,
                                 textStyle = TextStyle(
-                                    fontSize = if (uiState.inputText.length < 50) 22.sp else 17.sp,
+                                    fontSize = if (uiState.inputText.length < 50) 20.sp else 16.sp,
                                     color = MaterialTheme.colorScheme.onSurface,
-                                    lineHeight = 28.sp
+                                    lineHeight = 26.sp
                                 ),
                                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .heightIn(min = 28.dp, max = 220.dp)
+                                    .heightIn(min = 26.dp, max = 200.dp)
                                     .verticalScroll(rememberScrollState())
                             )
                         }
+
+                        // 紧凑操作区：单行时直接内联于同一行右侧（约32dp高），多行时靠右上角停靠
                         if (uiState.inputText.isNotEmpty()) {
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    onClearInput()
-                                },
-                                modifier = Modifier.size(32.dp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Icon(Icons.Default.Close, contentDescription = "清空")
+                                IconButton(
+                                    onClick = onSpeakSource,
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (uiState.isSpeakingSource) Icons.AutoMirrored.Filled.VolumeUp
+                                        else Icons.AutoMirrored.Outlined.VolumeUp,
+                                        tint = if (uiState.isSpeakingSource) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        contentDescription = if (uiState.isSpeakingSource) "停止朗读" else "朗读原文",
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onClearInput()
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "清空",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -240,37 +271,31 @@ fun MainScreen(
                             icon = { Icon(Icons.Outlined.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp)) },
                             label = { Text("粘贴: ${uiState.clipboardPreview.take(18)}...", maxLines = 1) },
                             shape = CircleShape,
-                            modifier = Modifier.padding(top = 6.dp)
+                            modifier = Modifier.padding(top = 8.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    // 输入卡片底部状态与流光加载条
+                    // 输入卡片流光加载条
                     if (uiState.isLoading) {
+                        Spacer(modifier = Modifier.height(6.dp))
                         LinearProgressIndicator(
                             modifier = Modifier.fillMaxWidth().height(2.dp),
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = onSpeakSource, enabled = uiState.inputText.isNotEmpty()) {
-                            Icon(
-                                imageVector = if (uiState.isSpeakingSource) Icons.AutoMirrored.Filled.VolumeUp
-                                else Icons.AutoMirrored.Outlined.VolumeUp,
-                                tint = if (uiState.isSpeakingSource) MaterialTheme.colorScheme.primary else LocalContentColor.current,
-                                contentDescription = if (uiState.isSpeakingSource) "停止朗读" else "朗读原文"
+
+                    // 多行时展示字数统计，单行紧凑模式下不占垂直高度
+                    AnimatedVisibility(visible = isMultiLine) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Text(
+                                text = "${uiState.inputText.length} / 5000",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
                         }
-                        Text(
-                            text = "${uiState.inputText.length} / 5000",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
                 }
             }

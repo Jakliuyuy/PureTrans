@@ -325,38 +325,91 @@ class EngineUnitTest {
 
     @Test
     fun testTtsOnlineAudioCandidates() {
-        // 1. 中文：国内直连有道优先（le=zh），Google 兜底 (zh-CN)
-        val zhCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("zh", "你好")
-        assertEquals(2, zhCandidates.size)
-        assertTrue(zhCandidates[0].contains("dict.youdao.com/dictvoice"))
-        assertTrue(zhCandidates[0].contains("le=zh"))
-        assertTrue(zhCandidates[1].contains("translate.google.com/translate_tts"))
-        assertTrue(zhCandidates[1].contains("tl=zh-CN"))
+        // 1. 中文短词：国内极速直连百度优先（lan=zh），Google 官方流兜底 (zh-CN)，单词级附加有道词典源 (le=zh)
+        val zhWordCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("zh", "你好")
+        assertEquals(3, zhWordCandidates.size)
+        assertTrue(zhWordCandidates[0].contains("fanyi.baidu.com/gettts"))
+        assertTrue(zhWordCandidates[0].contains("lan=zh"))
+        assertTrue(zhWordCandidates[1].contains("translate.google.com/translate_tts"))
+        assertTrue(zhWordCandidates[1].contains("tl=zh-CN"))
+        assertTrue(zhWordCandidates[2].contains("dict.youdao.com/dictvoice"))
+        assertTrue(zhWordCandidates[2].contains("le=zh"))
 
-        // 2. 英文：国内直连有道优先（type=2 美音），Google 兜底 (tl=en)
-        val enCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("en", "Hello world")
-        assertEquals(2, enCandidates.size)
-        assertTrue(enCandidates[0].contains("dict.youdao.com/dictvoice"))
-        assertTrue(enCandidates[0].contains("type=2"))
-        assertTrue(enCandidates[1].contains("translate.google.com/translate_tts"))
-        assertTrue(enCandidates[1].contains("tl=en"))
+        // 2. 中文长句：百度直连长句优先，Google 官方流兜底，严禁引入有道 500 崩溃源
+        val zhSentence = "你好世界，今天天气真好，我们一起去公园散步吧。"
+        val zhSentenceCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("zh", zhSentence)
+        assertEquals(2, zhSentenceCandidates.size)
+        assertTrue(zhSentenceCandidates[0].contains("fanyi.baidu.com/gettts"))
+        assertTrue(zhSentenceCandidates[1].contains("translate.google.com/translate_tts"))
+        assertFalse(zhSentenceCandidates.any { it.contains("dict.youdao.com") })
 
-        // 3. 日文与韩文
+        // 3. 英文短词：国内极速直连百度优先（lan=en），Google 官方流兜底 (tl=en)，单词级附加有道美音 (type=2)
+        val enWordCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("en", "apple")
+        assertEquals(3, enWordCandidates.size)
+        assertTrue(enWordCandidates[0].contains("fanyi.baidu.com/gettts"))
+        assertTrue(enWordCandidates[0].contains("lan=en"))
+        assertTrue(enWordCandidates[1].contains("translate.google.com/translate_tts"))
+        assertTrue(enWordCandidates[1].contains("tl=en"))
+        assertTrue(enWordCandidates[2].contains("dict.youdao.com/dictvoice"))
+        assertTrue(enWordCandidates[2].contains("type=2"))
+
+        // 4. 英文长句：百度直连长句优先，Google 官方流兜底，杜绝有道长句 500
+        val enSentence = "Hello world, this is a test sentence for pronunciation."
+        val enSentenceCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("en", enSentence)
+        assertEquals(2, enSentenceCandidates.size)
+        assertTrue(enSentenceCandidates[0].contains("fanyi.baidu.com/gettts"))
+        assertTrue(enSentenceCandidates[1].contains("translate.google.com/translate_tts"))
+        assertFalse(enSentenceCandidates.any { it.contains("dict.youdao.com") })
+
+        // 5. 日文与韩文
         val jaCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("ja", "ありがとう")
-        assertTrue(jaCandidates[0].contains("le=jap"))
+        assertTrue(jaCandidates[0].contains("fanyi.baidu.com/gettts"))
+        assertTrue(jaCandidates[0].contains("lan=jp"))
         val koCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("ko", "감사합니다")
-        assertTrue(koCandidates[0].contains("le=ko"))
+        assertTrue(koCandidates[0].contains("fanyi.baidu.com/gettts"))
+        assertTrue(koCandidates[0].contains("lan=kor"))
 
-        // 4. 阿拉伯语等小语种：Google 优先
+        // 6. 阿拉伯语等国际小语种：Google 官方流首选
         val arCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("ar", "مرحبا")
         assertTrue(arCandidates[0].contains("translate.google.com"))
 
-        // 5. 空文本保护
+        // 7. 空文本安全保护
         val emptyCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("en", "")
         assertTrue(emptyCandidates.isEmpty())
 
-        // 6. auto 语种自动识别
+        // 8. auto 语种自动识别
         val autoZhCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("auto", "早上好")
-        assertTrue(autoZhCandidates[0].contains("le=zh"))
+        assertTrue(autoZhCandidates[0].contains("fanyi.baidu.com/gettts"))
+        assertTrue(autoZhCandidates[0].contains("lan=zh"))
+
+        // 9. 标点符号与问号排除有道 500
+        val punctuatedCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("en", "How are you?")
+        assertEquals(2, punctuatedCandidates.size)
+        assertFalse(punctuatedCandidates.any { it.contains("dict.youdao.com") })
+
+        // 10. 包含换行符排除有道 500
+        val linebreakCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("en", "Hello\nWorld")
+        assertEquals(2, linebreakCandidates.size)
+        assertFalse(linebreakCandidates.any { it.contains("dict.youdao.com") })
+
+        // 11. 繁体中文 zh-TW 正确映射
+        val twCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("zh-tw", "早安")
+        assertTrue(twCandidates[0].contains("fanyi.baidu.com/gettts?lan=zh"))
+        assertTrue(twCandidates[1].contains("tl=zh-TW"))
+
+        // 12. 欧洲小语种法语、俄语长句（排除有道源，仅保留 Google 官方流）
+        val frCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("fr", "Bonjour tout le monde, il fait beau aujourd'hui.")
+        assertEquals(1, frCandidates.size)
+        assertTrue(frCandidates[0].contains("translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=fr"))
+
+        val ruCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("ru", "Привет, мир, сегодня отличная погода.")
+        assertEquals(1, ruCandidates.size)
+        assertTrue(ruCandidates[0].contains("tl=ru"))
+
+        // 13. 超长文本截断测试 (保护 URL 长度)
+        val longText = "a".repeat(500)
+        val longCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("en", longText)
+        assertTrue(longCandidates[0].contains("text=" + "a".repeat(250)))
+        assertFalse(longCandidates[0].contains("text=" + "a".repeat(251)))
     }
 }

@@ -2,7 +2,10 @@ package com.puretrans.app.util
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
+import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
@@ -13,16 +16,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.net.URLEncoder
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 原生 Android TTS 与在线免密音频流（Cloud Audio Fallback）双模朗读管理引擎
  * 针对国内国产 ROM（OPPO ColorOS、小米 HyperOS、vivo OriginOS 等）深度适配：
  * 1. 支持 Android 11+ 软件包可见性与多引擎动态查询；
  * 2. 本地 TTS 与在线音频流双模互补无缝切换：
- *    - 本地 TTS 可用且支持目标语种语音包时优先调用本地离线合成；
+ *    - 本地 TTS 可用且支持目标语种语音包时优先调用本地离线合成（配置 STREAM_MUSIC 与媒体音频属性）；
  *    - 若本地 TTS 未初始化、返回 LANG_NOT_SUPPORTED / LANG_MISSING_DATA，或本地播放超时静音/异常，
- *      立即自动无缝切换为在线免密音频流兜底（有道极速国内直连 + Google TTS 双通道）；
- * 3. 完整的播放状态追踪与 Toggle 切换；
+ *      立即自动无缝切换为在线免密音频流兜底（百度极速国内直连长句流 + Google 官方音频流双通道）；
+ * 3. 完整的播放状态追踪与 Toggle 切换，使用 Generation Token 杜绝多线程竞态与幽灵音频；
  * 4. 朗读触发时提供轻量明确的状态 Toast 提示，彻底解决“点击没反应、静音无声”问题。
  */
 class TtsManager private constructor(private val appContext: Context) {
@@ -40,14 +45,16 @@ class TtsManager private constructor(private val appContext: Context) {
     private var isInitializing = false
     private var pendingSpeakAction: (() -> Unit)? = null
 
-    // 在线音频流播放器与看门狗定时器
+    // 在线音频流播放器与代数令牌（杜绝多线程并发混音）
     private var mediaPlayer: MediaPlayer? = null
+    private val playGeneration = AtomicLong(0)
     private var watchdogRunnable: Runnable? = null
     private var currentToast: Toast? = null
 
     private var lastSpokenText: String? = null
     private var lastSpokenLang: String? = null
     private var lastOnError: (String) -> Unit = {}
+    private var activeFallbackFlag: AtomicBoolean? = null
 
     init {
         initTts()
@@ -61,6 +68,14 @@ class TtsManager private constructor(private val appContext: Context) {
                 isInitializing = false
                 if (status == TextToSpeech.SUCCESS) {
                     isInitialized = true
+                    try {
+                        tts?.setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .build()
+                        )
+                    } catch (_: Exception) {}
                     setupTtsListeners()
                     pendingSpeakAction?.invoke()
                     pendingSpeakAction = null
@@ -117,17 +132,20 @@ class TtsManager private constructor(private val appContext: Context) {
 
     private fun handleLocalError(utteranceId: String?) {
         cancelWatchdog()
-        val text = lastSpokenText
-        val lang = lastSpokenLang
-        if (!text.isNullOrBlank() && !lang.isNullOrBlank()) {
-            val candidates = getOnlineAudioCandidates(lang, text)
-            playOnlineAudio(candidates, utteranceId ?: "fallback_tts", lastOnError)
-        } else {
-            mainHandler.post {
-                if (_currentUtteranceId.value == utteranceId) {
-                    _isSpeaking.value = false
-                    _currentUtteranceId.value = null
-                }
+        val flag = activeFallbackFlag
+        if (flag != null && !flag.getAndSet(true)) {
+            val text = lastSpokenText
+            val lang = lastSpokenLang
+            if (!text.isNullOrBlank() && !lang.isNullOrBlank()) {
+                val candidates = getOnlineAudioCandidates(lang, text)
+                playOnlineAudio(candidates, utteranceId ?: "fallback_tts", playGeneration.get(), lastOnError)
+                return
+            }
+        }
+        mainHandler.post {
+            if (_currentUtteranceId.value == utteranceId) {
+                _isSpeaking.value = false
+                _currentUtteranceId.value = null
             }
         }
     }
@@ -157,11 +175,13 @@ class TtsManager private constructor(private val appContext: Context) {
         val cleanText = text.trim()
         if (cleanText.isEmpty()) return
 
+        val thisGen = playGeneration.incrementAndGet()
+
         lastSpokenText = cleanText
         lastSpokenLang = langCode
         lastOnError = onError
 
-        stop()
+        stop(advanceGeneration = false)
         showToast("正在朗读...")
 
         val locale = getLocaleForLanguage(langCode, cleanText)
@@ -176,6 +196,9 @@ class TtsManager private constructor(private val appContext: Context) {
         }
 
         if (isLocalEngineUsable && engine != null) {
+            val fallbackFlag = AtomicBoolean(false)
+            activeFallbackFlag = fallbackFlag
+
             try {
                 engine.language = locale
                 engine.setSpeechRate(1.0f)
@@ -185,28 +208,37 @@ class TtsManager private constructor(private val appContext: Context) {
 
                 // 设置 1500ms 看门狗定时器：若某些国产机本地引擎返回成功却静音卡死未触发 onStart，无缝切换在线流
                 val watchdog = Runnable {
-                    if (!_isSpeaking.value && _currentUtteranceId.value == utteranceId) {
-                        try {
-                            engine.stop()
-                        } catch (_: Exception) {}
-                        playOnlineAudio(onlineCandidates, utteranceId, onError)
+                    if (thisGen == playGeneration.get() && !_isSpeaking.value && _currentUtteranceId.value == utteranceId) {
+                        if (!fallbackFlag.getAndSet(true)) {
+                            try {
+                                engine.stop()
+                            } catch (_: Exception) {}
+                            playOnlineAudio(onlineCandidates, utteranceId, thisGen, onError)
+                        }
                     }
                 }
                 watchdogRunnable = watchdog
                 mainHandler.postDelayed(watchdog, 1500)
 
-                val speakResult = engine.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                val params = Bundle().apply {
+                    putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
+                }
+                val speakResult = engine.speak(cleanText, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
                 if (speakResult != TextToSpeech.SUCCESS) {
                     cancelWatchdog()
-                    playOnlineAudio(onlineCandidates, utteranceId, onError)
+                    if (!fallbackFlag.getAndSet(true)) {
+                        playOnlineAudio(onlineCandidates, utteranceId, thisGen, onError)
+                    }
                 }
             } catch (_: Exception) {
                 cancelWatchdog()
-                playOnlineAudio(onlineCandidates, utteranceId, onError)
+                if (!fallbackFlag.getAndSet(true)) {
+                    playOnlineAudio(onlineCandidates, utteranceId, thisGen, onError)
+                }
             }
         } else {
             // 本地 TTS 缺少语言包或未准备好，立即转入免密在线音频流播放
-            playOnlineAudio(onlineCandidates, utteranceId, onError)
+            playOnlineAudio(onlineCandidates, utteranceId, thisGen, onError)
         }
     }
 
@@ -227,16 +259,19 @@ class TtsManager private constructor(private val appContext: Context) {
     }
 
     /**
-     * 播放在线免密音频流（支持多源自动轮询兜底）
+     * 播放在线免密音频流（支持多源自动轮询兜底与 Generation 校验）
      */
     private fun playOnlineAudio(
         candidateUrls: List<String>,
         utteranceId: String,
+        expectedGen: Long,
         onError: (String) -> Unit
     ) {
+        if (expectedGen != playGeneration.get()) return
+
         if (candidateUrls.isEmpty()) {
             mainHandler.post {
-                if (_currentUtteranceId.value == utteranceId) {
+                if (expectedGen == playGeneration.get() && _currentUtteranceId.value == utteranceId) {
                     _isSpeaking.value = false
                     _currentUtteranceId.value = null
                 }
@@ -249,11 +284,15 @@ class TtsManager private constructor(private val appContext: Context) {
         val remainingUrls = candidateUrls.drop(1)
 
         mainHandler.post {
-            _isSpeaking.value = true
-            _currentUtteranceId.value = utteranceId
+            if (expectedGen == playGeneration.get()) {
+                _isSpeaking.value = true
+                _currentUtteranceId.value = utteranceId
+            }
         }
 
         Thread {
+            if (expectedGen != playGeneration.get()) return@Thread
+
             try {
                 releaseMediaPlayer()
                 val player = MediaPlayer()
@@ -263,26 +302,36 @@ class TtsManager private constructor(private val appContext: Context) {
                         .setUsage(AudioAttributes.USAGE_MEDIA)
                         .build()
                 )
-                player.setDataSource(currentUrl)
+
+                val headers = mapOf("User-Agent" to "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36")
+                player.setDataSource(appContext, Uri.parse(currentUrl), headers)
 
                 player.setOnPreparedListener { mp ->
+                    if (expectedGen != playGeneration.get()) {
+                        try { mp.release() } catch (_: Exception) {}
+                        return@setOnPreparedListener
+                    }
                     try {
                         mp.start()
                         mainHandler.post {
-                            _isSpeaking.value = true
-                            _currentUtteranceId.value = utteranceId
+                            if (expectedGen == playGeneration.get()) {
+                                _isSpeaking.value = true
+                                _currentUtteranceId.value = utteranceId
+                            }
                         }
                     } catch (_: Exception) {
                         releaseMediaPlayer()
-                        playOnlineAudio(remainingUrls, utteranceId, onError)
+                        playOnlineAudio(remainingUrls, utteranceId, expectedGen, onError)
                     }
                 }
 
                 player.setOnCompletionListener {
-                    mainHandler.post {
-                        if (_currentUtteranceId.value == utteranceId) {
-                            _isSpeaking.value = false
-                            _currentUtteranceId.value = null
+                    if (expectedGen == playGeneration.get()) {
+                        mainHandler.post {
+                            if (_currentUtteranceId.value == utteranceId) {
+                                _isSpeaking.value = false
+                                _currentUtteranceId.value = null
+                            }
                         }
                     }
                     releaseMediaPlayer()
@@ -290,20 +339,33 @@ class TtsManager private constructor(private val appContext: Context) {
 
                 player.setOnErrorListener { _, _, _ ->
                     releaseMediaPlayer()
-                    mainHandler.post {
-                        playOnlineAudio(remainingUrls, utteranceId, onError)
+                    if (expectedGen == playGeneration.get()) {
+                        mainHandler.post {
+                            playOnlineAudio(remainingUrls, utteranceId, expectedGen, onError)
+                        }
                     }
                     true
                 }
 
+                if (expectedGen != playGeneration.get()) {
+                    player.release()
+                    return@Thread
+                }
+
                 player.prepareAsync()
                 synchronized(this) {
-                    mediaPlayer = player
+                    if (expectedGen == playGeneration.get()) {
+                        mediaPlayer = player
+                    } else {
+                        try { player.release() } catch (_: Exception) {}
+                    }
                 }
             } catch (_: Exception) {
                 releaseMediaPlayer()
-                mainHandler.post {
-                    playOnlineAudio(remainingUrls, utteranceId, onError)
+                if (expectedGen == playGeneration.get()) {
+                    mainHandler.post {
+                        playOnlineAudio(remainingUrls, utteranceId, expectedGen, onError)
+                    }
                 }
             }
         }.start()
@@ -329,11 +391,17 @@ class TtsManager private constructor(private val appContext: Context) {
     private fun releaseMediaPlayer() {
         try {
             mediaPlayer?.apply {
-                if (isPlaying) {
-                    stop()
-                }
-                reset()
-                release()
+                try {
+                    if (isPlaying) {
+                        stop()
+                    }
+                } catch (_: Exception) {}
+                try {
+                    reset()
+                } catch (_: Exception) {}
+                try {
+                    release()
+                } catch (_: Exception) {}
             }
         } catch (_: Exception) {}
         mediaPlayer = null
@@ -342,8 +410,12 @@ class TtsManager private constructor(private val appContext: Context) {
     /**
      * 立即停止朗读
      */
-    fun stop() {
+    fun stop(advanceGeneration: Boolean = true) {
+        if (advanceGeneration) {
+            playGeneration.incrementAndGet()
+        }
         cancelWatchdog()
+        activeFallbackFlag = null
         try {
             tts?.stop()
         } catch (_: Exception) {}
@@ -412,6 +484,11 @@ class TtsManager private constructor(private val appContext: Context) {
             }
         }
 
+        /**
+         * 构建在线免密音频候选流
+         * 针对国内国产安卓 ROM（OPPO/小米/vivo）优先注入国内畅通无阻的极速长句音频流（百度翻译高可用源），
+         * 同时支持 Google TTS 全语种官方流无缝兜底，单词级附加词典音标源。
+         */
         fun getOnlineAudioCandidates(langCode: String, text: String): List<String> {
             val cleanText = text.trim()
             if (cleanText.isEmpty()) return emptyList()
@@ -430,6 +507,7 @@ class TtsManager private constructor(private val appContext: Context) {
                 langCode.trim().lowercase()
             }
 
+            // 1. Google 官方全语种音频流（无需 Key，公开可用）
             val googleCode = when (code) {
                 "zh", "zh-cn", "zh-hans" -> "zh-CN"
                 "zh-tw", "zh-hant" -> "zh-TW"
@@ -447,28 +525,58 @@ class TtsManager private constructor(private val appContext: Context) {
             }
             val googleUrl = "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=$googleCode&q=$encodedText"
 
-            val youdaoUrl = when (code) {
-                "en", "en-us", "en-gb" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&type=2"
-                "zh", "zh-cn", "zh-hans", "zh-tw", "zh-hant" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=zh"
-                "ja", "jp" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=jap"
-                "ko", "kor" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=ko"
-                "fr", "fra" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=fr"
-                "es", "spa" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=es"
-                "de", "ger" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=de"
-                "ru", "rus" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=ru"
-                else -> "https://dict.youdao.com/dictvoice?audio=$encodedText"
+            // 2. 百度极速国内直连长句音频流（国内无阻碍，支持长句和标点，100% 畅通稳定）
+            val baiduLan = when (code) {
+                "zh", "zh-cn", "zh-hans", "zh-tw", "zh-hant" -> "zh"
+                "en", "en-us", "en-gb" -> "en"
+                "ja", "jp" -> "jp"
+                "ko", "kor" -> "kor"
+                else -> null
+            }
+            val baiduUrl = baiduLan?.let {
+                "https://fanyi.baidu.com/gettts?lan=$it&text=$encodedText&spd=5&source=web"
             }
 
-            return when (code) {
-                "zh", "zh-cn", "zh-hans", "zh-tw", "zh-hant",
-                "en", "en-us", "en-gb",
-                "ja", "jp", "ko", "kor", "fr", "fra", "es", "spa", "de", "ger" -> {
-                    listOf(youdaoUrl, googleUrl)
+            // 3. 有道词典单单词源（仅在短词/单词且无标点符号时作为辅助音标源，彻底规避长句 500 错误）
+            val hasPunctuation = cleanText.any { it in "，。？！；：“”‘’（）《》、,?.!;:\'\"" || it == '\n' }
+            val isCjk = cleanText.any { it.code in 0x2e80..0x9fff }
+            val isShortWord = !hasPunctuation && if (isCjk) {
+                cleanText.length <= 4
+            } else {
+                cleanText.split(Regex("\\s+")).filter { it.isNotEmpty() }.size <= 2 && cleanText.length <= 25
+            }
+            val youdaoUrl = if (isShortWord) {
+                when (code) {
+                    "en", "en-us", "en-gb" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&type=2"
+                    "zh", "zh-cn", "zh-hans", "zh-tw", "zh-hant" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=zh"
+                    "ja", "jp" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=jap"
+                    "ko", "kor" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=ko"
+                    "fr", "fra" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=fr"
+                    "es", "spa" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=es"
+                    "de", "ger" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=de"
+                    "ru", "rus" -> "https://dict.youdao.com/dictvoice?audio=$encodedText&le=ru"
+                    else -> "https://dict.youdao.com/dictvoice?audio=$encodedText"
                 }
-                else -> {
-                    listOf(googleUrl, youdaoUrl)
+            } else null
+
+            val result = mutableListOf<String>()
+
+            // 国内最核心语种（中、英、日、韩）99% 场景：国内秒开的百度长句流排第一，Google 兜底
+            if (baiduUrl != null) {
+                result.add(baiduUrl)
+                result.add(googleUrl)
+                if (youdaoUrl != null) {
+                    result.add(youdaoUrl)
+                }
+            } else {
+                // 其它国际小语种：Google TTS 官方流首选，辅以短词词典源
+                result.add(googleUrl)
+                if (youdaoUrl != null) {
+                    result.add(youdaoUrl)
                 }
             }
+
+            return result
         }
     }
 }
