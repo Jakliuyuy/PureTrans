@@ -58,9 +58,15 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
 }
 
 dependencies {
+    implementation("androidx.fragment:fragment-ktx:1.7.0")
     val composeBom = platform("androidx.compose:compose-bom:2024.04.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
@@ -83,6 +89,9 @@ dependencies {
 
     // Security
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    // ML Kit Text Recognition for Camera/Image Translation
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

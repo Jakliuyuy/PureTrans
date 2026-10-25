@@ -11,6 +11,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -253,7 +255,12 @@ fun MainScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(onClick = onSpeakSource, enabled = uiState.inputText.isNotEmpty()) {
-                            Icon(Icons.Outlined.VolumeUp, contentDescription = "朗读原文")
+                            Icon(
+                                imageVector = if (uiState.isSpeakingSource) Icons.AutoMirrored.Filled.VolumeUp
+                                else Icons.AutoMirrored.Outlined.VolumeUp,
+                                tint = if (uiState.isSpeakingSource) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                                contentDescription = if (uiState.isSpeakingSource) "停止朗读" else "朗读原文"
+                            )
                         }
                         Text(
                             text = "${uiState.inputText.length} / 5000",
@@ -326,7 +333,12 @@ fun MainScreen(
                             horizontalArrangement = Arrangement.SpaceAround
                         ) {
                             IconButton(onClick = onSpeakTarget) {
-                                Icon(Icons.Outlined.VolumeUp, contentDescription = "朗读译文")
+                                Icon(
+                                    imageVector = if (uiState.isSpeakingTarget) Icons.AutoMirrored.Filled.VolumeUp
+                                    else Icons.AutoMirrored.Outlined.VolumeUp,
+                                    tint = if (uiState.isSpeakingTarget) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                                    contentDescription = if (uiState.isSpeakingTarget) "停止朗读" else "朗读译文"
+                                )
                             }
                             IconButton(onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)

@@ -16,5 +16,8 @@ data class MainUiState(
     val activeEngineLabel: String = "免密",
     val latencyMs: Long = 0,
     val isFavorite: Boolean = false,
+    val isAutoDetecting: Boolean = true,
+    val isSpeakingSource: Boolean = false,
+    val isSpeakingTarget: Boolean = false,
     val errorMessage: String? = null
 )

@@ -19,19 +19,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.puretrans.app.ui.fullscreen.FullScreenActivity
 import com.puretrans.app.ui.history.HistoryScreen
+import com.puretrans.app.ui.image.ImageTranslateActivity
 import com.puretrans.app.ui.main.MainScreen
 import com.puretrans.app.ui.main.MainViewModel
 import com.puretrans.app.ui.settings.SettingsScreen
 import com.puretrans.app.ui.settings.SettingsViewModel
 import com.puretrans.app.ui.theme.PureTransTheme
+import com.puretrans.app.util.TtsManager
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
     private val mainViewModel: MainViewModel by viewModels()
     private val settingsViewModel: SettingsViewModel by viewModels()
-
-    private var tts: TextToSpeech? = null
 
     // 语音输入识别 Launcher
     private val speechRecognitionLauncher = registerForActivityResult(
@@ -48,13 +48,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // 初始化 TTS 朗读引擎
-        tts = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.getDefault()
-            }
-        }
 
         setContent {
             PureTransTheme {
@@ -79,10 +72,14 @@ class MainActivity : ComponentActivity() {
                                 onSelectTargetLanguage = mainViewModel::onSelectTargetLanguage,
                                 onClearInput = mainViewModel::onClearInput,
                                 onSpeakSource = {
-                                    speakText(mainUiState.inputText, mainUiState.sourceLanguage.code)
+                                    mainViewModel.toggleSpeakSource { msg ->
+                                        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                                    }
                                 },
                                 onSpeakTarget = {
-                                    speakText(mainUiState.translatedText, mainUiState.targetLanguage.code)
+                                    mainViewModel.toggleSpeakTarget { msg ->
+                                        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                                    }
                                 },
                                 onToggleFavorite = mainViewModel::onToggleFavorite,
                                 onOpenFullScreen = {
@@ -100,7 +97,7 @@ class MainActivity : ComponentActivity() {
                                     currentScreen = Screen.SETTINGS
                                 },
                                 onOpenCameraOcr = {
-                                    Toast.makeText(this@MainActivity, "相机/取词功能：支持划词翻译或调用系统取景", Toast.LENGTH_SHORT).show()
+                                    ImageTranslateActivity.start(this@MainActivity)
                                 },
                                 onStartVoiceInput = {
                                     startVoiceRecognition()
@@ -133,7 +130,9 @@ class MainActivity : ComponentActivity() {
                         Screen.HISTORY -> {
                             HistoryScreen(
                                 onNavigateBack = { currentScreen = Screen.MAIN },
-                                onSpeak = { text -> speakText(text) }
+                                onSpeak = { text ->
+                                    TtsManager.getInstance(this@MainActivity).speak(text, "auto")
+                                }
                             )
                         }
                     }
@@ -157,21 +156,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun speakText(text: String, langCode: String = "") {
-        if (text.isBlank()) return
-        val locale = when (langCode.lowercase()) {
-            "zh", "zh-cn" -> Locale.CHINESE
-            "en" -> Locale.ENGLISH
-            "ja" -> Locale.JAPANESE
-            "ko" -> Locale.KOREAN
-            "fr" -> Locale.FRENCH
-            "de" -> Locale.GERMAN
-            else -> Locale.getDefault()
-        }
-        tts?.language = locale
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "main_tts")
-    }
-
     private fun startVoiceRecognition() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -187,8 +171,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        tts?.stop()
-        tts?.shutdown()
+        mainViewModel.stopSpeaking()
     }
 
     enum class Screen {

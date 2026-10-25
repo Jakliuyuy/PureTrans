@@ -12,10 +12,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,9 +32,10 @@ import com.puretrans.app.ui.theme.PureTransTheme
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-class QuickTranslateActivity : ComponentActivity() {
+import com.puretrans.app.util.TtsManager
+import com.puretrans.app.util.LanguageDetector
 
-    private var tts: TextToSpeech? = null
+class QuickTranslateActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,12 +43,6 @@ class QuickTranslateActivity : ComponentActivity() {
         val selectedText = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
             ?: intent.getStringExtra(Intent.EXTRA_TEXT)
             ?: ""
-
-        tts = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.getDefault()
-            }
-        }
 
         val dm = resources.displayMetrics
         val width = (dm.widthPixels * 0.90f).toInt()
@@ -69,10 +64,11 @@ class QuickTranslateActivity : ComponentActivity() {
                         isLoading = false
                         return@LaunchedEffect
                     }
+                    val (srcLang, tgtLang) = LanguageDetector.determineAutoDirection(selectedText)
                     val result = router.translate(
                         text = selectedText,
-                        sourceLang = Language.AUTO,
-                        targetLang = Language.ZH
+                        sourceLang = srcLang,
+                        targetLang = tgtLang
                     )
                     isLoading = false
                     if (result.isSuccess) {
@@ -155,12 +151,12 @@ class QuickTranslateActivity : ComponentActivity() {
                                 IconButton(
                                     onClick = {
                                         if (translatedText.isNotEmpty()) {
-                                            tts?.speak(translatedText, TextToSpeech.QUEUE_FLUSH, null, "quick_tts")
+                                            TtsManager.getInstance(this@QuickTranslateActivity).speak(translatedText, "auto")
                                         }
                                     },
                                     enabled = translatedText.isNotEmpty()
                                 ) {
-                                    Icon(Icons.Outlined.VolumeUp, contentDescription = "朗读")
+                                    Icon(Icons.AutoMirrored.Outlined.VolumeUp, contentDescription = "朗读")
                                 }
 
                                 Spacer(modifier = Modifier.width(4.dp))
@@ -188,7 +184,5 @@ class QuickTranslateActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        tts?.stop()
-        tts?.shutdown()
     }
 }

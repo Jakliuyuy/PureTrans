@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -230,7 +231,7 @@ private fun HistoryCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onSpeak, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Outlined.VolumeUp, contentDescription = "朗读", modifier = Modifier.size(18.dp))
+                    Icon(Icons.AutoMirrored.Outlined.VolumeUp, contentDescription = "朗读", modifier = Modifier.size(18.dp))
                 }
                 IconButton(onClick = onCopy, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Outlined.ContentCopy, contentDescription = "复制", modifier = Modifier.size(18.dp))

@@ -14,9 +14,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.ScreenRotation
-import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,20 +27,14 @@ import androidx.compose.ui.unit.sp
 import com.puretrans.app.ui.theme.PureTransTheme
 import java.util.Locale
 
-class FullScreenActivity : ComponentActivity() {
+import com.puretrans.app.util.TtsManager
 
-    private var tts: TextToSpeech? = null
+class FullScreenActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val text = intent.getStringExtra(EXTRA_TEXT).orEmpty()
-
-        tts = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.getDefault()
-            }
-        }
 
         setContent {
             PureTransTheme {
@@ -48,7 +42,7 @@ class FullScreenActivity : ComponentActivity() {
                     text = text,
                     onClose = { finish() },
                     onSpeak = {
-                        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "fullscreen_tts")
+                        TtsManager.getInstance(this@FullScreenActivity).speak(text, "auto")
                     },
                     onToggleOrientation = {
                         requestedOrientation = if (requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE) {
@@ -64,8 +58,7 @@ class FullScreenActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        tts?.stop()
-        tts?.shutdown()
+        TtsManager.getInstance(this).stop()
     }
 
     companion object {
@@ -115,7 +108,7 @@ fun FullScreenContent(
                         Icon(Icons.Outlined.ScreenRotation, contentDescription = "旋转屏幕")
                     }
                     FilledTonalIconButton(onClick = onSpeak, shape = CircleShape) {
-                        Icon(Icons.Outlined.VolumeUp, contentDescription = "朗读")
+                        Icon(Icons.AutoMirrored.Outlined.VolumeUp, contentDescription = "朗读")
                     }
                 }
             }

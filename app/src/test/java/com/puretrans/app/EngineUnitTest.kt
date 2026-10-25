@@ -138,4 +138,75 @@ class EngineUnitTest {
         val allEmpty = ("".isNotBlank() && "".isNotBlank()) || "".isNotBlank()
         assertFalse(allEmpty)
     }
+
+    @Test
+    fun testLanguageDetectorContainsChinese() {
+        // 纯中文
+        assertTrue(com.puretrans.app.util.LanguageDetector.containsChinese("你好，世界"))
+        assertTrue(com.puretrans.app.util.LanguageDetector.containsChinese("今天天气真好！"))
+
+        // 中英混排
+        assertTrue(com.puretrans.app.util.LanguageDetector.containsChinese("Hello 你好"))
+        assertTrue(com.puretrans.app.util.LanguageDetector.containsChinese("使用 Compose 开发 Android 翻译 App"))
+
+        // 纯英文
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese("Hello world"))
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese("How are you today?"))
+
+        // 纯韩文
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese("안녕하세요"))
+
+        // 纯日文假名
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese("ありがとう"))
+
+        // 其他西文、西里尔、阿拉伯文
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese("Bonjour tout le monde"))
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese("Hola amigo"))
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese("Привет мир"))
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese("مرحبا"))
+
+        // 数字与标点边界情况
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese("1234567890"))
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese("!@#$%^&*()_+-="))
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese(""))
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese("   \t\n  "))
+        assertFalse(com.puretrans.app.util.LanguageDetector.containsChinese(null))
+    }
+
+    @Test
+    fun testLanguageDetectorBidirectionalAutoRouting() {
+        // 1. 输入中文 -> 自动识别翻译成英文 (zh -> en)
+        val (srcZh, tgtZh) = com.puretrans.app.util.LanguageDetector.determineAutoDirection("你好，今天过得好吗？")
+        assertEquals(Language.ZH, srcZh)
+        assertEquals(Language.EN, tgtZh)
+
+        // 中英混杂（含中文） -> 翻译成英文
+        val (srcMix, tgtMix) = com.puretrans.app.util.LanguageDetector.determineAutoDirection("请帮我 check 一下这个 bug")
+        assertEquals(Language.ZH, srcMix)
+        assertEquals(Language.EN, tgtMix)
+
+        // 2. 输入其他国家语言（英文） -> 自动识别翻译成中文 (auto -> zh)
+        val (srcEn, tgtEn) = com.puretrans.app.util.LanguageDetector.determineAutoDirection("Good morning, how are you doing?")
+        assertEquals(Language.AUTO, srcEn)
+        assertEquals(Language.ZH, tgtEn)
+
+        // 输入其他国家语言（韩文） -> 自动识别翻译成中文 (auto -> zh)
+        val (srcKo, tgtKo) = com.puretrans.app.util.LanguageDetector.determineAutoDirection("감사합니다")
+        assertEquals(Language.AUTO, srcKo)
+        assertEquals(Language.ZH, tgtKo)
+
+        // 输入其他国家语言（法文） -> 自动识别翻译成中文 (auto -> zh)
+        val (srcFr, tgtFr) = com.puretrans.app.util.LanguageDetector.determineAutoDirection("Je t'aime")
+        assertEquals(Language.AUTO, srcFr)
+        assertEquals(Language.ZH, tgtFr)
+
+        // 3. 空输入或纯空白 -> 默认待命状态 auto -> zh
+        val (srcEmpty, tgtEmpty) = com.puretrans.app.util.LanguageDetector.determineAutoDirection("")
+        assertEquals(Language.AUTO, srcEmpty)
+        assertEquals(Language.ZH, tgtEmpty)
+
+        val (srcBlank, tgtBlank) = com.puretrans.app.util.LanguageDetector.determineAutoDirection("   \n ")
+        assertEquals(Language.AUTO, srcBlank)
+        assertEquals(Language.ZH, tgtBlank)
+    }
 }
