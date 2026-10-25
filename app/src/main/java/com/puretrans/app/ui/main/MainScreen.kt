@@ -184,13 +184,13 @@ fun MainScreen(
                 }
             }
 
-            // 2. 原文输入卡片 (仿 Google 翻译大圆角无边框设计)
+            // 2. 原文输入卡片 (仿 Google 翻译大圆角紧凑自适应设计)
             Surface(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp),
+                modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(28.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerLow
             ) {
-                Column(modifier = Modifier.padding(20.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -201,7 +201,8 @@ fun MainScreen(
                                 Text(
                                     text = "输入文本...",
                                     fontSize = 22.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                    lineHeight = 28.sp
                                 )
                             }
                             BasicTextField(
@@ -213,7 +214,10 @@ fun MainScreen(
                                     lineHeight = 28.sp
                                 ),
                                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                                modifier = Modifier.fillMaxWidth().heightIn(min = 90.dp)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 28.dp, max = 220.dp)
+                                    .verticalScroll(rememberScrollState())
                             )
                         }
                         if (uiState.inputText.isNotEmpty()) {
@@ -236,11 +240,11 @@ fun MainScreen(
                             icon = { Icon(Icons.Outlined.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp)) },
                             label = { Text("粘贴: ${uiState.clipboardPreview.take(18)}...", maxLines = 1) },
                             shape = CircleShape,
-                            modifier = Modifier.padding(top = 8.dp)
+                            modifier = Modifier.padding(top = 6.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
 
                     // 输入卡片底部状态与流光加载条
                     if (uiState.isLoading) {
@@ -250,7 +254,7 @@ fun MainScreen(
                         )
                     }
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {

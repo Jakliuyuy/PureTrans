@@ -8,6 +8,13 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
+    <!-- Android 11+ 软件包可见性：声明 TTS 引擎服务查询权限，适配国内定制 ROM（ColorOS/MIUI/OriginOS 等） -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <application
         android:name=".PureTransApp"
         android:allowBackup="true"

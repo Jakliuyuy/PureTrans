@@ -300,4 +300,63 @@ class EngineUnitTest {
         }
         assertEquals(1, inSampleSize3)
     }
+
+    @Test
+    fun testTtsLocaleMapping() {
+        // 中文映射
+        assertEquals(java.util.Locale.SIMPLIFIED_CHINESE, com.puretrans.app.util.TtsManager.getLocaleForLanguage("zh"))
+        assertEquals(java.util.Locale.SIMPLIFIED_CHINESE, com.puretrans.app.util.TtsManager.getLocaleForLanguage("zh-CN"))
+        assertEquals(java.util.Locale.TRADITIONAL_CHINESE, com.puretrans.app.util.TtsManager.getLocaleForLanguage("zh-TW"))
+
+        // 英文与欧洲语系
+        assertEquals(java.util.Locale.US, com.puretrans.app.util.TtsManager.getLocaleForLanguage("en"))
+        assertEquals(java.util.Locale.UK, com.puretrans.app.util.TtsManager.getLocaleForLanguage("en-GB"))
+        assertEquals(java.util.Locale.FRENCH, com.puretrans.app.util.TtsManager.getLocaleForLanguage("fr"))
+        assertEquals(java.util.Locale.GERMAN, com.puretrans.app.util.TtsManager.getLocaleForLanguage("de"))
+        assertEquals(java.util.Locale.JAPANESE, com.puretrans.app.util.TtsManager.getLocaleForLanguage("ja"))
+        assertEquals(java.util.Locale.KOREAN, com.puretrans.app.util.TtsManager.getLocaleForLanguage("ko"))
+
+        // auto 智能基于输入文本推断
+        assertEquals(java.util.Locale.SIMPLIFIED_CHINESE, com.puretrans.app.util.TtsManager.getLocaleForLanguage("auto", "你好"))
+        assertEquals(java.util.Locale.US, com.puretrans.app.util.TtsManager.getLocaleForLanguage("auto", "Hello world"))
+        assertEquals(java.util.Locale.JAPANESE, com.puretrans.app.util.TtsManager.getLocaleForLanguage("auto", "こんにちは"))
+        assertEquals(java.util.Locale.KOREAN, com.puretrans.app.util.TtsManager.getLocaleForLanguage("auto", "안녕하세요"))
+    }
+
+    @Test
+    fun testTtsOnlineAudioCandidates() {
+        // 1. 中文：国内直连有道优先（le=zh），Google 兜底 (zh-CN)
+        val zhCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("zh", "你好")
+        assertEquals(2, zhCandidates.size)
+        assertTrue(zhCandidates[0].contains("dict.youdao.com/dictvoice"))
+        assertTrue(zhCandidates[0].contains("le=zh"))
+        assertTrue(zhCandidates[1].contains("translate.google.com/translate_tts"))
+        assertTrue(zhCandidates[1].contains("tl=zh-CN"))
+
+        // 2. 英文：国内直连有道优先（type=2 美音），Google 兜底 (tl=en)
+        val enCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("en", "Hello world")
+        assertEquals(2, enCandidates.size)
+        assertTrue(enCandidates[0].contains("dict.youdao.com/dictvoice"))
+        assertTrue(enCandidates[0].contains("type=2"))
+        assertTrue(enCandidates[1].contains("translate.google.com/translate_tts"))
+        assertTrue(enCandidates[1].contains("tl=en"))
+
+        // 3. 日文与韩文
+        val jaCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("ja", "ありがとう")
+        assertTrue(jaCandidates[0].contains("le=jap"))
+        val koCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("ko", "감사합니다")
+        assertTrue(koCandidates[0].contains("le=ko"))
+
+        // 4. 阿拉伯语等小语种：Google 优先
+        val arCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("ar", "مرحبا")
+        assertTrue(arCandidates[0].contains("translate.google.com"))
+
+        // 5. 空文本保护
+        val emptyCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("en", "")
+        assertTrue(emptyCandidates.isEmpty())
+
+        // 6. auto 语种自动识别
+        val autoZhCandidates = com.puretrans.app.util.TtsManager.getOnlineAudioCandidates("auto", "早上好")
+        assertTrue(autoZhCandidates[0].contains("le=zh"))
+    }
 }
