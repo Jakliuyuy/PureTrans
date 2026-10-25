@@ -56,7 +56,35 @@ class SmartTranslationRouter(
             }
         }
 
-        val result = engine.translate(trimmed, sourceLang, targetLang)
+        val rawResult = engine.translate(trimmed, sourceLang, targetLang)
+
+        // 英文音标智能解析与开放词典极速补充
+        val result = if (rawResult.isSuccess && rawResult.translatedText.isNotBlank()) {
+            val transText = rawResult.translatedText
+            val isTargetEnglish = targetLang.code.startsWith("en", ignoreCase = true) ||
+                    (!com.puretrans.app.util.LanguageDetector.containsChinese(transText) &&
+                            com.puretrans.app.util.LanguageDetector.detectLanguage(transText) == Language.EN)
+
+            val currentPhonetic = rawResult.phonetic
+            val enrichedPhonetic = when {
+                !currentPhonetic.isNullOrBlank() -> {
+                    if (isTargetEnglish) com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic(currentPhonetic, true)
+                    else currentPhonetic
+                }
+                isTargetEnglish -> {
+                    com.puretrans.app.util.PhoneticHelper.fetchEnglishPhonetic(transText)
+                }
+                else -> null
+            }
+
+            if (!enrichedPhonetic.isNullOrBlank() && enrichedPhonetic != currentPhonetic) {
+                rawResult.copy(phonetic = enrichedPhonetic)
+            } else {
+                rawResult
+            }
+        } else {
+            rawResult
+        }
 
         // 成功时自动异步记录到本地历史数据库
         if (result.isSuccess && result.translatedText.isNotBlank()) {

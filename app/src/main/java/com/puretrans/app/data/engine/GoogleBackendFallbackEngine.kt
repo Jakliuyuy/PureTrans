@@ -131,27 +131,24 @@ class GoogleBackendFallbackEngine(
             val rootArray = JsonParser.parseString(jsonString).asJsonArray
             val translationArray = rootArray.get(0).asJsonArray
             val sb = StringBuilder()
-            var phonetic: String? = null
-
             for (element in translationArray) {
                 if (element.isJsonArray) {
                     val subArray = element.asJsonArray
                     if (subArray.size() > 0 && !subArray.get(0).isJsonNull) {
                         sb.append(subArray.get(0).asString)
                     }
-                    if (phonetic == null) {
-                        if (subArray.size() > 2 && !subArray.get(2).isJsonNull && subArray.get(2).asString.isNotBlank()) {
-                            phonetic = subArray.get(2).asString
-                        } else if (subArray.size() > 3 && !subArray.get(3).isJsonNull && subArray.get(3).asString.isNotBlank()) {
-                            phonetic = subArray.get(3).asString
-                        }
-                    }
                 }
+            }
+
+            val translated = sb.toString()
+            var phonetic = com.puretrans.app.util.PhoneticHelper.extractGtxPhonetic(rootArray, targetLang)
+            if (phonetic.isNullOrBlank() && targetLang.code.startsWith("en", ignoreCase = true)) {
+                phonetic = com.puretrans.app.util.PhoneticHelper.fetchEnglishPhonetic(translated, client)
             }
 
             TranslationResult(
                 originalText = originalText,
-                translatedText = sb.toString(),
+                translatedText = translated,
                 sourceLang = sourceLang.displayName,
                 targetLang = targetLang.displayName,
                 activeEngineLabel = engineName,

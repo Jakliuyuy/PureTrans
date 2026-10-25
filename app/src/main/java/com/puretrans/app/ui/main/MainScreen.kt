@@ -342,13 +342,15 @@ fun MainScreen(
                             lineHeight = 32.sp
                         )
 
-                        // 次级拼音/音标展示 (次级透明度)
+                        // 次级拼音/音标展示 (紧挨译文以优雅次级透明度呈现)
                         if (!uiState.phonetic.isNullOrEmpty() && uiState.errorMessage == null) {
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = uiState.phonetic,
                                 fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.65f)
+                                fontWeight = FontWeight.Normal,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                                lineHeight = 20.sp
                             )
                         }
 

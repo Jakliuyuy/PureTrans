@@ -553,5 +553,100 @@ class EngineUnitTest {
         assertEquals(0f, com.puretrans.app.ui.image.ImageOverlayRenderer.computeMaskWidth(0f, 100f), 0.1f)
         assertEquals(100f, com.puretrans.app.ui.image.ImageOverlayRenderer.computeMaskWidth(100f, 0f), 0.1f)
     }
+
+    @Test
+    fun testPhoneticIpaFormatting() {
+        // 1. 英文无括号 -> 格式化为 [xxx]
+        assertEquals("[həˈloʊ]", com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic("həˈloʊ", true))
+        assertEquals("[ˈæp(ə)l]", com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic("ˈæp(ə)l", true))
+
+        // 2. 已经有方括号或斜杠 -> 保持原样
+        assertEquals("[həˈləʊ]", com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic("[həˈləʊ]", true))
+        assertEquals("/həˈloʊ/", com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic("/həˈloʊ/", true))
+
+        // 3. 中文拼音 -> 不强制加方括号
+        assertEquals("Nǐ hǎo, shìjiè", com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic("Nǐ hǎo, shìjiè", false))
+
+        // 4. 空值与空白字符
+        assertNull(com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic(null, true))
+        assertNull(com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic("", true))
+        assertNull(com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic("   ", true))
+    }
+
+    @Test
+    fun testPinyinAndIpaDistinction() {
+        // 英文音标识别
+        assertTrue(com.puretrans.app.util.PhoneticHelper.isLikelyEnglishPhonetic("həˈlō wərld"))
+        assertTrue(com.puretrans.app.util.PhoneticHelper.isLikelyEnglishPhonetic("ˈæp(ə)l"))
+        assertTrue(com.puretrans.app.util.PhoneticHelper.isLikelyEnglishPhonetic("[test]"))
+        assertTrue(com.puretrans.app.util.PhoneticHelper.isLikelyEnglishPhonetic("/test/"))
+        assertFalse(com.puretrans.app.util.PhoneticHelper.isLikelyEnglishPhonetic("Nǐ hǎo"))
+
+        // 汉语拼音声调识别
+        assertTrue(com.puretrans.app.util.PhoneticHelper.containsPinyinTone("Nǐ hǎo, shìjiè"))
+        assertTrue(com.puretrans.app.util.PhoneticHelper.containsPinyinTone("píngguǒ"))
+        // 英文音标带 ə 排除在拼音之外
+        assertFalse(com.puretrans.app.util.PhoneticHelper.containsPinyinTone("həˈlō wərld"))
+    }
+
+    @Test
+    fun testGtxExtractPhoneticForTargetEnglish() {
+        // 源语言为中文，目标语言为英文，gtx 返回中携带拼音与英文音标
+        val jsonMock = """
+            [[["Hello, world","你好，世界",null,null,1],[null,null,"Nǐ hǎo, shìjiè","həˈlō wərld"]],null,"zh-CN"]
+        """.trimIndent()
+        val rootArray = JsonParser.parseString(jsonMock).asJsonArray
+        val extracted = com.puretrans.app.util.PhoneticHelper.extractGtxPhonetic(rootArray, Language.EN)
+        assertEquals("[həˈlō wərld]", extracted)
+    }
+
+    @Test
+    fun testGtxExtractPhoneticForTargetChinese() {
+        // 源语言为英文，目标语言为中文，gtx 返回中携带拼音与英文音标
+        val jsonMock = """
+            [[["你好，世界","Hello, world",null,null,1],[null,null,"Nǐ hǎo, shìjiè","həˈlō wərld"]],null,"en"]
+        """.trimIndent()
+        val rootArray = JsonParser.parseString(jsonMock).asJsonArray
+        val extracted = com.puretrans.app.util.PhoneticHelper.extractGtxPhonetic(rootArray, Language.ZH)
+        assertEquals("Nǐ hǎo, shìjiè", extracted)
+    }
+
+    @Test
+    fun testParseYoudaoPhoneticJson() {
+        val youdaoJson = """
+            {
+              "simple": {
+                "word": [
+                  {
+                    "usphone": "həˈloʊ",
+                    "ukphone": "həˈləʊ"
+                  }
+                ]
+              }
+            }
+        """.trimIndent()
+        val parsed = com.puretrans.app.util.PhoneticHelper.parseYoudaoPhoneticJson(youdaoJson)
+        assertEquals("[həˈloʊ]", parsed)
+
+        // 仅有 ukphone 的情况
+        val ukOnlyJson = """
+            {
+              "ec": {
+                "word": [
+                  {
+                    "usphone": "",
+                    "ukphone": "həˈləʊ"
+                  }
+                ]
+              }
+            }
+        """.trimIndent()
+        val parsedUk = com.puretrans.app.util.PhoneticHelper.parseYoudaoPhoneticJson(ukOnlyJson)
+        assertEquals("[həˈləʊ]", parsedUk)
+
+        // 无效 json 或缺少音标
+        assertNull(com.puretrans.app.util.PhoneticHelper.parseYoudaoPhoneticJson("{}"))
+        assertNull(com.puretrans.app.util.PhoneticHelper.parseYoudaoPhoneticJson("invalid json"))
+    }
 }
 
