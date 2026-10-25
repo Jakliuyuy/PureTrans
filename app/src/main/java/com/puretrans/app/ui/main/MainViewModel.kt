@@ -81,10 +81,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // 智能双向自动语种识别与目标语言匹配：
-        // 处于自动检测模式时进行文本语种判定：
-        // 只要输入的是中文（包含中文字符），自动将目标语言设为英文（zh -> en）；
-        // 只要输入的是其他国家语言（非中文，如英文、日文、西文等），自动将目标语言设为中文（auto -> zh）
-        if (_uiState.value.isAutoDetecting) {
+        // 核心规则：
+        // 1. 只要输入的是中文（包含中文字符），自动将目标语言设为英文（zh -> en），并执行翻译；
+        // 2. 只要输入的是其他国家语言（非中文，如英文、日文、西文等），自动将目标语言设为中文（auto -> zh），并执行翻译；
+        // 3. UI 界面上方的语言选择胶囊能够实时反馈当前检测与切换的方向。
+        val shouldAutoDetect = _uiState.value.isAutoDetecting ||
+                _uiState.value.sourceLanguage == Language.AUTO ||
+                _uiState.value.targetLanguage == Language.ZH ||
+                _uiState.value.targetLanguage == Language.EN
+
+        if (shouldAutoDetect) {
             val (autoSource, autoTarget) = LanguageDetector.determineAutoDirection(trimmed)
             _uiState.update {
                 it.copy(
@@ -93,6 +99,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     targetLanguage = autoTarget,
                     sourceLanguageName = autoSource.displayName,
                     targetLanguageName = autoTarget.displayName,
+                    isAutoDetecting = true,
                     isFavorite = false,
                     errorMessage = null
                 )
@@ -151,7 +158,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         _uiState.update {
             it.copy(
-                isAutoDetecting = false, // 用户手动互换后暂停自动推导
                 sourceLanguage = newSource,
                 targetLanguage = newTarget,
                 sourceLanguageName = newSource.displayName,
@@ -195,9 +201,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onSelectTargetLanguage(lang: Language) {
+        val isZhOrEn = lang.code.equals("zh", ignoreCase = true) || lang.code.equals("en", ignoreCase = true)
         _uiState.update {
             it.copy(
-                isAutoDetecting = false,
+                isAutoDetecting = isZhOrEn,
                 targetLanguage = lang,
                 targetLanguageName = lang.displayName
             )

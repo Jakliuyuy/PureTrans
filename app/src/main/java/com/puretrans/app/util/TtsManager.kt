@@ -31,6 +31,7 @@ class TtsManager private constructor(private val appContext: Context) {
     private val _currentUtteranceId = MutableStateFlow<String?>(null)
     val currentUtteranceId: StateFlow<String?> = _currentUtteranceId.asStateFlow()
 
+    private var isInitializing = false
     private var pendingSpeakAction: (() -> Unit)? = null
 
     init {
@@ -38,7 +39,10 @@ class TtsManager private constructor(private val appContext: Context) {
     }
 
     private fun initTts() {
+        if (isInitializing) return
+        isInitializing = true
         tts = TextToSpeech(appContext) { status ->
+            isInitializing = false
             if (status == TextToSpeech.SUCCESS) {
                 isInitialized = true
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -114,11 +118,17 @@ class TtsManager private constructor(private val appContext: Context) {
             "pt", "por" -> Locale("pt")
             "it", "ita" -> Locale.ITALIAN
             "ar", "ara" -> Locale("ar")
-            "auto" -> {
-                if (LanguageDetector.containsChinese(sampleText)) {
-                    Locale.SIMPLIFIED_CHINESE
-                } else {
-                    Locale.ENGLISH
+            "auto", "" -> {
+                // 当处于自动语种时，基于待朗读文本字符特征智能推断最适合的 Locale
+                val detected = LanguageDetector.detectLanguage(sampleText)
+                when (detected) {
+                    com.puretrans.app.data.model.Language.ZH -> Locale.SIMPLIFIED_CHINESE
+                    com.puretrans.app.data.model.Language.JA -> Locale.JAPANESE
+                    com.puretrans.app.data.model.Language.KO -> Locale.KOREAN
+                    com.puretrans.app.data.model.Language.RU -> Locale("ru")
+                    com.puretrans.app.data.model.Language.AR -> Locale("ar")
+                    com.puretrans.app.data.model.Language.EN -> Locale.US
+                    else -> Locale.US
                 }
             }
             else -> {

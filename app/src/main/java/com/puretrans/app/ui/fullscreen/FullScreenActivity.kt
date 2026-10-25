@@ -35,6 +35,7 @@ class FullScreenActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val text = intent.getStringExtra(EXTRA_TEXT).orEmpty()
+        val langCode = intent.getStringExtra(EXTRA_LANG).orEmpty()
 
         setContent {
             PureTransTheme {
@@ -42,7 +43,7 @@ class FullScreenActivity : ComponentActivity() {
                     text = text,
                     onClose = { finish() },
                     onSpeak = {
-                        TtsManager.getInstance(this@FullScreenActivity).speak(text, "auto")
+                        TtsManager.getInstance(this@FullScreenActivity).speak(text, langCode)
                     },
                     onToggleOrientation = {
                         requestedOrientation = if (requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE) {

@@ -32,7 +32,7 @@ import java.util.Locale
 @Composable
 fun HistoryScreen(
     onNavigateBack: () -> Unit,
-    onSpeak: (String) -> Unit
+    onSpeak: (String, String) -> Unit
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
@@ -150,7 +150,7 @@ fun HistoryScreen(
                                 clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(item.translatedText))
                                 Toast.makeText(context, "已复制译文", Toast.LENGTH_SHORT).show()
                             },
-                            onSpeak = { onSpeak(item.translatedText) },
+                            onSpeak = { onSpeak(item.translatedText, item.targetLangCode) },
                             onToggleFavorite = {
                                 coroutineScope.launch {
                                     historyDb.toggleFavorite(item.sourceText, item.translatedText)

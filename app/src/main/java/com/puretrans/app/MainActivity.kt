@@ -87,7 +87,7 @@ class MainActivity : ComponentActivity() {
                                         FullScreenActivity.start(
                                             this@MainActivity,
                                             mainUiState.translatedText,
-                                            mainUiState.targetLanguage.displayName
+                                            mainUiState.targetLanguage.code
                                         )
                                     }
                                 },
@@ -130,8 +130,8 @@ class MainActivity : ComponentActivity() {
                         Screen.HISTORY -> {
                             HistoryScreen(
                                 onNavigateBack = { currentScreen = Screen.MAIN },
-                                onSpeak = { text ->
-                                    TtsManager.getInstance(this@MainActivity).speak(text, "auto")
+                                onSpeak = { text, langCode ->
+                                    TtsManager.getInstance(this@MainActivity).speak(text, langCode)
                                 }
                             )
                         }

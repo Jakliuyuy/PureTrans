@@ -104,6 +104,7 @@ class EngineUnitTest {
     fun testLanguageSwapWhenSourceIsAuto() {
         // 验证源语言为 auto 时的互换逻辑
         val currentSource = Language.AUTO
+        assertEquals("auto", currentSource.code)
         val currentTargetJa = Language.JA
 
         val newSourceJa = currentTargetJa
@@ -208,5 +209,95 @@ class EngineUnitTest {
         val (srcBlank, tgtBlank) = com.puretrans.app.util.LanguageDetector.determineAutoDirection("   \n ")
         assertEquals(Language.AUTO, srcBlank)
         assertEquals(Language.ZH, tgtBlank)
+    }
+
+    @Test
+    fun testLanguageDetectorMultiScriptIdentification() {
+        // 日文（含平假名或片假名）
+        assertEquals(Language.JA, com.puretrans.app.util.LanguageDetector.detectLanguage("こんにちは"))
+        assertEquals(Language.JA, com.puretrans.app.util.LanguageDetector.detectLanguage("カタカナテスト"))
+        assertEquals(Language.JA, com.puretrans.app.util.LanguageDetector.detectLanguage("東京に行きます"))
+
+        // 韩文
+        assertEquals(Language.KO, com.puretrans.app.util.LanguageDetector.detectLanguage("안녕하세요"))
+        assertEquals(Language.KO, com.puretrans.app.util.LanguageDetector.detectLanguage("감사합니다"))
+
+        // 俄文（西里尔字母）
+        assertEquals(Language.RU, com.puretrans.app.util.LanguageDetector.detectLanguage("Привет мир"))
+        assertEquals(Language.RU, com.puretrans.app.util.LanguageDetector.detectLanguage("Спасибо большое"))
+
+        // 阿拉伯文
+        assertEquals(Language.AR, com.puretrans.app.util.LanguageDetector.detectLanguage("مرحبا بالعالم"))
+        assertEquals(Language.AR, com.puretrans.app.util.LanguageDetector.detectLanguage("شكرا جزيلا"))
+
+        // 中文（纯汉字）
+        assertEquals(Language.ZH, com.puretrans.app.util.LanguageDetector.detectLanguage("你好世界"))
+        assertEquals(Language.ZH, com.puretrans.app.util.LanguageDetector.detectLanguage("极速免密翻译应用"))
+
+        // 英文（纯拉丁字母）
+        assertEquals(Language.EN, com.puretrans.app.util.LanguageDetector.detectLanguage("Hello world"))
+        assertEquals(Language.EN, com.puretrans.app.util.LanguageDetector.detectLanguage("This is a test"))
+
+        // 纯符号或数字
+        assertEquals(Language.AUTO, com.puretrans.app.util.LanguageDetector.detectLanguage("123456"))
+        assertEquals(Language.AUTO, com.puretrans.app.util.LanguageDetector.detectLanguage("!@#$%^&*()"))
+        assertEquals(Language.AUTO, com.puretrans.app.util.LanguageDetector.detectLanguage(""))
+        assertEquals(Language.AUTO, com.puretrans.app.util.LanguageDetector.detectLanguage(null))
+    }
+
+    @Test
+    fun testLanguageDetectorConsecutiveSwitching() {
+        // 模拟用户连续交替输入不同语言
+        val inputs = listOf(
+            "Hello" to Pair(Language.AUTO, Language.ZH),
+            "你好" to Pair(Language.ZH, Language.EN),
+            "こんにちは" to Pair(Language.AUTO, Language.ZH),
+            "很高兴认识你" to Pair(Language.ZH, Language.EN),
+            "Bonjour" to Pair(Language.AUTO, Language.ZH),
+            "测试" to Pair(Language.ZH, Language.EN)
+        )
+
+        for ((input, expected) in inputs) {
+            val result = com.puretrans.app.util.LanguageDetector.determineAutoDirection(input)
+            assertEquals("Failed for input: $input", expected.first, result.first)
+            assertEquals("Failed for input: $input", expected.second, result.second)
+        }
+    }
+
+    @Test
+    fun testImageDownsamplingCalculation() {
+        val maxDimension = 2048
+
+        // 场景 1: 超长图 1000 x 6000
+        val height1 = 6000
+        val width1 = 1000
+        var inSampleSize1 = 1
+        val maxDim1 = kotlin.math.max(height1, width1)
+        while ((maxDim1 / inSampleSize1) > maxDimension) {
+            inSampleSize1 *= 2
+        }
+        assertEquals(4, inSampleSize1)
+        assertTrue((height1 / inSampleSize1) <= maxDimension)
+
+        // 场景 2: 超宽全景图 8000 x 1200
+        val height2 = 1200
+        val width2 = 8000
+        var inSampleSize2 = 1
+        val maxDim2 = kotlin.math.max(height2, width2)
+        while ((maxDim2 / inSampleSize2) > maxDimension) {
+            inSampleSize2 *= 2
+        }
+        assertEquals(4, inSampleSize2)
+        assertTrue((width2 / inSampleSize2) <= maxDimension)
+
+        // 场景 3: 正常尺寸图片 1920 x 1080
+        val height3 = 1080
+        val width3 = 1920
+        var inSampleSize3 = 1
+        val maxDim3 = kotlin.math.max(height3, width3)
+        while ((maxDim3 / inSampleSize3) > maxDimension) {
+            inSampleSize3 *= 2
+        }
+        assertEquals(1, inSampleSize3)
     }
 }

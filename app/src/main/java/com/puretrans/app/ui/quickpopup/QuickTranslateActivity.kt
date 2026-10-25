@@ -54,6 +54,7 @@ class QuickTranslateActivity : ComponentActivity() {
         setContent {
             PureTransTheme {
                 var translatedText by remember { mutableStateOf("") }
+                var targetLanguageCode by remember { mutableStateOf("zh") }
                 var isLoading by remember { mutableStateOf(true) }
                 var errorMessage by remember { mutableStateOf<String?>(null) }
                 val clipboardManager = LocalClipboardManager.current
@@ -65,6 +66,7 @@ class QuickTranslateActivity : ComponentActivity() {
                         return@LaunchedEffect
                     }
                     val (srcLang, tgtLang) = LanguageDetector.determineAutoDirection(selectedText)
+                    targetLanguageCode = tgtLang.code
                     val result = router.translate(
                         text = selectedText,
                         sourceLang = srcLang,
@@ -151,7 +153,7 @@ class QuickTranslateActivity : ComponentActivity() {
                                 IconButton(
                                     onClick = {
                                         if (translatedText.isNotEmpty()) {
-                                            TtsManager.getInstance(this@QuickTranslateActivity).speak(translatedText, "auto")
+                                            TtsManager.getInstance(this@QuickTranslateActivity).speak(translatedText, targetLanguageCode)
                                         }
                                     },
                                     enabled = translatedText.isNotEmpty()
