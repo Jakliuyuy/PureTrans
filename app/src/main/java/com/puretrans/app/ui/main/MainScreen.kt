@@ -1,8 +1,9 @@
 package com.puretrans.app.ui.main
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -50,7 +51,7 @@ fun MainScreen(
     var swapRotation by remember { mutableFloatStateOf(0f) }
     val animatedRotation by animateFloatAsState(
         targetValue = swapRotation,
-        animationSpec = tween(durationMillis = 300),
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
         label = "swap_rotation"
     )
 
@@ -90,7 +91,7 @@ fun MainScreen(
                             onClick = onOpenSettings,
                             label = {
                                 Text(
-                                    text = if (uiState.isDirectMode) "⚡ 极速直连" else "☁️ 免密谷歌",
+                                    text = if (uiState.isDirectMode) "🟢 极速直连" else "🔵 免密谷歌",
                                     fontSize = 11.sp
                                 )
                             },

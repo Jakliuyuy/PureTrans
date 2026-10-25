@@ -139,8 +139,12 @@ class GoogleBackendFallbackEngine(
                     if (subArray.size() > 0 && !subArray.get(0).isJsonNull) {
                         sb.append(subArray.get(0).asString)
                     }
-                    if (subArray.size() > 3 && !subArray.get(3).isJsonNull) {
-                        phonetic = subArray.get(3).asString
+                    if (phonetic == null) {
+                        if (subArray.size() > 2 && !subArray.get(2).isJsonNull && subArray.get(2).asString.isNotBlank()) {
+                            phonetic = subArray.get(2).asString
+                        } else if (subArray.size() > 3 && !subArray.get(3).isJsonNull && subArray.get(3).asString.isNotBlank()) {
+                            phonetic = subArray.get(3).asString
+                        }
                     }
                 }
             }

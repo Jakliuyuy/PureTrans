@@ -49,6 +49,10 @@ class QuickTranslateActivity : ComponentActivity() {
             }
         }
 
+        val dm = resources.displayMetrics
+        val width = (dm.widthPixels * 0.90f).toInt()
+        window.setLayout(width, android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+
         val app = application as PureTransApp
         val router = app.router
 
@@ -78,24 +82,14 @@ class QuickTranslateActivity : ComponentActivity() {
                     }
                 }
 
-                // 悬浮窗背景半透明容器，点击空白处关闭
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.35f))
-                        .clickable { finish() },
-                    contentAlignment = Alignment.Center
+                ElevatedCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                    ),
+                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 8.dp)
                 ) {
-                    ElevatedCard(
-                        modifier = Modifier
-                            .fillMaxWidth(0.9f)
-                            .clickable(enabled = false) {}, // 阻止向背景传递点击
-                        shape = RoundedCornerShape(24.dp),
-                        colors = CardDefaults.elevatedCardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                        ),
-                        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 10.dp)
-                    ) {
                         Column(
                             modifier = Modifier.padding(20.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -191,7 +185,6 @@ class QuickTranslateActivity : ComponentActivity() {
                 }
             }
         }
-    }
 
     override fun onDestroy() {
         super.onDestroy()

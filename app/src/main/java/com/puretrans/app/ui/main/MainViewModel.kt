@@ -85,8 +85,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val currentSource = _uiState.value.sourceLanguage
         val currentTarget = _uiState.value.targetLanguage
 
-        val newSource = if (currentSource.code == "auto") Language.ZH else currentTarget
-        val newTarget = if (currentSource.code == "auto") Language.EN else currentSource
+        val newSource: Language
+        val newTarget: Language
+
+        if (currentSource.code.equals("auto", ignoreCase = true)) {
+            newSource = currentTarget
+            newTarget = if (currentTarget.code.equals("zh", ignoreCase = true)) Language.EN else Language.ZH
+        } else {
+            newSource = currentTarget
+            newTarget = currentSource
+        }
 
         _uiState.update {
             it.copy(
