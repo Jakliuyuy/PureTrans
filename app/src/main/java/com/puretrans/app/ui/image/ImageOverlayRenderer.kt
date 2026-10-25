@@ -45,101 +45,133 @@ object ImageOverlayRenderer {
         val text = block.translatedText.trim()
         if (text.isEmpty() || width <= 2 || height <= 2) return width
 
-        val padX = (width * 0.035f).coerceIn(2f * scale, 8f * scale)
-        val padY = (height * 0.05f).coerceIn(1f * scale, 6f * scale)
-        val availWidth = (width - padX * 2).coerceAtLeast(10f)
-        val availHeight = (height - padY * 2).coerceAtLeast(10f)
-
-        // 1. 排版与测量
-        val textPaint = TextPaint().apply {
-            isAntiAlias = true
-            isSubpixelText = true
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            color = block.textColor
-            textAlign = Paint.Align.LEFT
-        }
-
-        val baseFontSize = height * 0.68f
-        textPaint.textSize = baseFontSize
-        val singleLineWidth = textPaint.measureText(text)
-
-        val layout: StaticLayout
-        val actualTextWidth: Float
-
-        if (singleLineWidth <= availWidth) {
-            // 单行能够放下：直接构建单行 StaticLayout，保持原位靠左自然排版
-            actualTextWidth = singleLineWidth
-            layout = StaticLayout.Builder.obtain(
-                text, 0, text.length, textPaint, availWidth.toInt().coerceAtLeast(1)
-            ).setAlignment(Layout.Alignment.ALIGN_NORMAL).setIncludePad(false).build()
-        } else {
-            // 单行超出可用宽度：
-            // 判断是否可以多行折行排版（原词框有足够高度且文本字数充足）
-            if (height >= 26f * scale && text.length > 5) {
-                // 尝试多行折行自适应字号
-                var low = 9f * scale
-                var high = baseFontSize
-                var bestLayout: StaticLayout = StaticLayout.Builder.obtain(
-                    text, 0, text.length, textPaint, availWidth.toInt().coerceAtLeast(1)
-                ).setAlignment(Layout.Alignment.ALIGN_NORMAL).setIncludePad(false).build()
-
-                for (iter in 0..5) {
-                    val mid = (low + high) / 2f
-                    textPaint.textSize = mid
-                    val testL = StaticLayout.Builder.obtain(
-                        text, 0, text.length, textPaint, availWidth.toInt().coerceAtLeast(1)
-                    ).setAlignment(Layout.Alignment.ALIGN_NORMAL).setIncludePad(false).build()
-
-                    if (testL.height <= availHeight) {
-                        bestLayout = testL
-                        low = mid
-                    } else {
-                        high = mid
-                    }
-                }
-                layout = bestLayout
-                var maxW = 0f
-                for (i in 0 until layout.lineCount) {
-                    maxW = max(maxW, layout.getLineWidth(i))
-                }
-                actualTextWidth = maxW
-            } else {
-                // 高度较窄，必须保持单行，缩放字号以适应
-                val shrinkFactor = availWidth / singleLineWidth
-                val fittedSize = max(9f * scale, baseFontSize * shrinkFactor)
-                textPaint.textSize = fittedSize
-                actualTextWidth = textPaint.measureText(text)
-                layout = StaticLayout.Builder.obtain(
-                    text, 0, text.length, textPaint, availWidth.toInt().coerceAtLeast(1)
-                ).setAlignment(Layout.Alignment.ALIGN_NORMAL).setIncludePad(false).build()
-            }
-        }
-
-        // 2. 绘制智能背景遮罩（紧凑贴合，绝不无限拉长）
-        val textNeededWidth = actualTextWidth + padX * 2
-        val maskWidth = computeMaskWidth(width, textNeededWidth)
+        // 1. 彻底纯色抹除原文字 (100% 无痕抹平覆盖)
+        // 外扩 2~3 像素，彻底覆盖字体上下左右溢出的反走样和笔画末端（如 g, j, p, q, y 等）
+        val expand = (2.5f * scale).coerceIn(2f, 5f)
+        val maskRect = RectF(
+            left - expand,
+            top - expand,
+            left + width + expand,
+            top + height + expand
+        )
 
         val bgPaint = Paint().apply {
             isAntiAlias = true
             color = block.dominantBgColor
-            alpha = 245
+            alpha = 255 // 必须 100% 不透明纯色抹平，绝不允许旧文字透出
             style = Paint.Style.FILL
         }
 
-        val rectF = RectF(left, top, left + maskWidth, top + height)
-        val cornerRadius = 4f * scale
-        canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, bgPaint)
+        val cornerRadius = 3f * scale
+        canvas.drawRoundRect(maskRect, cornerRadius, cornerRadius, bgPaint)
 
-        // 3. 绘制文字：靠左对齐 (textStartX = left + padX)，垂直居中
+        // 2. 排版空间与内边距 (Padding)
+        val padX = (width * 0.025f).coerceIn(4f * scale, 12f * scale)
+        val padY = (height * 0.035f).coerceIn(2f * scale, 8f * scale)
+        val availWidth = (width - padX * 2).coerceAtLeast(10f)
+        val availHeight = (height - padY * 2).coerceAtLeast(10f)
+
+        // 3. 原生 StaticLayout 优雅排版
+        val textPaint = TextPaint().apply {
+            isAntiAlias = true
+            isSubpixelText = true
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+            color = block.textColor
+            textAlign = Paint.Align.LEFT
+        }
+
+        val layout = computeOptimalLayout(
+            text = text,
+            textPaint = textPaint,
+            availWidth = availWidth,
+            availHeight = availHeight,
+            originalLineCount = block.lineCount,
+            boxHeight = height,
+            scale = scale
+        )
+
+        // 4. 文字靠左排版 (ALIGN_NORMAL) 且垂直居中
         val layoutHeight = layout.height
         val textStartX = left + padX
-        val textStartY = top + max(0f, (height - layoutHeight) / 2f)
+        val textStartY = top + padY + max(0f, (availHeight - layoutHeight) / 2f)
 
         canvas.save()
         canvas.translate(textStartX, textStartY)
         layout.draw(canvas)
         canvas.restore()
 
-        return maskWidth
+        return width + expand * 2
+    }
+
+    /**
+     * 自适应计算 StaticLayout：根据矩形尺寸与原始行数适配最佳字号，保证在矩形内舒展居中且自动折行
+     */
+    fun computeOptimalLayout(
+        text: String,
+        textPaint: TextPaint,
+        availWidth: Float,
+        availHeight: Float,
+        originalLineCount: Int,
+        boxHeight: Float,
+        scale: Float
+    ): StaticLayout {
+        val widthInt = availWidth.toInt().coerceAtLeast(1)
+
+        // 单行独立标题场景 (lineCount == 1 且文本较短)
+        if (originalLineCount == 1 && text.length <= 25) {
+            val baseSize = (boxHeight * 0.68f).coerceIn(12f * scale, 32f * scale)
+            textPaint.textSize = baseSize
+            val singleLineWidth = textPaint.measureText(text)
+
+            if (singleLineWidth <= availWidth) {
+                // 单行即可完全容纳
+                return buildStaticLayout(text, textPaint, widthInt)
+            } else {
+                // 超出一行：微调字号保持单行，若过小则允许折为两行
+                val fittedSize = (availWidth / singleLineWidth) * baseSize
+                if (fittedSize >= 11f * scale) {
+                    textPaint.textSize = fittedSize
+                    return buildStaticLayout(text, textPaint, widthInt)
+                }
+            }
+        }
+
+        // 多行段落场景 (Paragraph Block)
+        val avgLineH = boxHeight / max(1, originalLineCount).toFloat()
+        val maxSize = min(availHeight * 0.85f, max(12f * scale, avgLineH * 0.82f))
+        val minSize = 9f * scale
+
+        var low = minSize
+        var high = maxSize
+        textPaint.textSize = high
+
+        var bestLayout = buildStaticLayout(text, textPaint, widthInt)
+        if (bestLayout.height <= availHeight) {
+            return bestLayout
+        }
+
+        // 二分搜索使得 StaticLayout 高度恰好在 availHeight 内
+        for (iter in 0..6) {
+            val mid = (low + high) / 2f
+            textPaint.textSize = mid
+            val testLayout = buildStaticLayout(text, textPaint, widthInt)
+
+            if (testLayout.height <= availHeight) {
+                bestLayout = testLayout
+                low = mid // 尝试更大字号
+            } else {
+                high = mid // 超出高度，减小字号
+            }
+        }
+
+        return bestLayout
+    }
+
+    private fun buildStaticLayout(text: String, textPaint: TextPaint, width: Int): StaticLayout {
+        return StaticLayout.Builder.obtain(text, 0, text.length, textPaint, width)
+            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+            .setLineSpacing(0f, 1.15f) // 1.15 倍行间距，舒适阅读质感
+            .setIncludePad(false)
+            .build()
     }
 }

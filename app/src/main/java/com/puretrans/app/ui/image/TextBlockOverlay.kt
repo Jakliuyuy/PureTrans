@@ -18,5 +18,7 @@ data class TextBlockOverlay(
     val translatedText: String,
     val boundingBox: Rect,
     val dominantBgColor: Int = Color.WHITE,
-    val textColor: Int = Color.BLACK
+    val textColor: Int = Color.BLACK,
+    val lineCount: Int = 1
 )
+

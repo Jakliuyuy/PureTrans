@@ -705,5 +705,244 @@ class EngineUnitTest {
         val parsed = com.puretrans.app.util.PhoneticHelper.parseYoudaoPhoneticJson(jsonPhoneOnly)
         assertEquals("[kəmˈpjuːtər]", parsed)
     }
+
+    @Test
+    fun testParagraphClusteringWithIndependentHeaderAndMultiLineBody() {
+        // 模拟图 2 用户真实场景：
+        // 顶部独立单行标题：Thought for 35s > (top 100, bottom 120, height 20, width 150)
+        // 底部 6 行紧凑英文正文 (top 150 到 286, 行高 24, 行距 4px, width 600)
+        val header = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+            text = "Thought for 35s >",
+            left = 100,
+            top = 100,
+            right = 250,
+            bottom = 120
+        )
+
+        val bodyLines = listOf(
+            com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+                text = "This is the first line of the continuous response from assistant,",
+                left = 100,
+                top = 150,
+                right = 700,
+                bottom = 174
+            ),
+            com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+                text = "which provides in-depth technical analysis and explains every detail",
+                left = 100,
+                top = 178,
+                right = 695,
+                bottom = 202
+            ),
+            com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+                text = "of the architecture clearly so that developers can easily follow",
+                left = 100,
+                top = 206,
+                right = 705,
+                bottom = 230
+            ),
+            com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+                text = "and reproduce the state-of-the-art results without any confusion",
+                left = 100,
+                top = 234,
+                right = 690,
+                bottom = 258
+            ),
+            com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+                text = "or unexpected failures during runtime execution.",
+                left = 100,
+                top = 262,
+                right = 520,
+                bottom = 286
+            )
+        )
+
+        val allLines = listOf(header) + bodyLines
+        val clusters = com.puretrans.app.ui.image.ImageTranslateProcessor.clusterLinesIntoParagraphs(allLines)
+
+        // 验证：必须精准聚类为 2 个块（独立标题 + 连续段落大块），绝不允许切成 6 个孤立碎片！
+        assertEquals(2, clusters.size)
+
+        // 块 1: 独立标题
+        val cluster1 = clusters[0]
+        assertEquals("Thought for 35s >", cluster1.text)
+        assertEquals(1, cluster1.lineCount)
+        assertEquals(100, cluster1.left)
+        assertEquals(100, cluster1.top)
+        assertEquals(250, cluster1.right)
+        assertEquals(120, cluster1.bottom)
+
+        // 块 2: 5 行合并的多行连续段落
+        val cluster2 = clusters[1]
+        assertEquals(5, cluster2.lineCount)
+        assertTrue(cluster2.text.startsWith("This is the first line"))
+        assertTrue(cluster2.text.endsWith("during runtime execution."))
+        // 验证外接大矩形 unionRect 完整包裹全部 5 行
+        assertEquals(100, cluster2.left)
+        assertEquals(150, cluster2.top)
+        assertEquals(705, cluster2.right)
+        assertEquals(286, cluster2.bottom)
+    }
+
+    @Test
+    fun testParagraphClusteringWithLargeLineGapNotMerged() {
+        // 两行之间垂直距离很大（空行或段落分隔）应切分为不同块
+        val line1 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+            text = "Paragraph One Ending.",
+            left = 50,
+            top = 50,
+            right = 300,
+            bottom = 80 // height = 30
+        )
+        val line2 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+            text = "Paragraph Two Starting.",
+            left = 50,
+            top = 160, // gap = 160 - 80 = 80 > 30 * 1.35
+            right = 300,
+            bottom = 190
+        )
+
+        val clusters = com.puretrans.app.ui.image.ImageTranslateProcessor.clusterLinesIntoParagraphs(listOf(line1, line2))
+        assertEquals(2, clusters.size)
+        assertEquals("Paragraph One Ending.", clusters[0].text)
+        assertEquals("Paragraph Two Starting.", clusters[1].text)
+    }
+
+    @Test
+    fun testParagraphClusteringFontSizeDifferenceNotMerged() {
+        // 大字号标题（字高 50）与正文（字高 20），即便距离近也不应合为一个段落
+        val title = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+            text = "Big Section Title",
+            left = 50,
+            top = 50,
+            right = 400,
+            bottom = 100 // height = 50
+        )
+        val body = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+            text = "Normal small body text.",
+            left = 50,
+            top = 115, // gap = 15 <= avgH(35) * 1.35
+            right = 400,
+            bottom = 135 // height = 20, (50-20)/50 = 60% > 45%
+        )
+
+        val clusters = com.puretrans.app.ui.image.ImageTranslateProcessor.clusterLinesIntoParagraphs(listOf(title, body))
+        assertEquals(2, clusters.size)
+    }
+
+    @Test
+    fun testChineseProtectionDetection() {
+        // 1. 纯中文内容 -> 必须保护（返回 true）
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isMainlyChinese("深度思考过程"))
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isMainlyChinese("思考了 35 秒"))
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isMainlyChinese("已完成代码审查与构建"))
+
+        // 2. 中文包含数字或英文代号 -> 保护
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isMainlyChinese("代码重构指南 v2.0"))
+
+        // 3. 纯英文或英文为主 -> 不保护（返回 false），以便正常翻译为中文
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isMainlyChinese("Thought for 35s >"))
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isMainlyChinese("This is a clean English paragraph for testing."))
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isMainlyChinese("Function returns a status code."))
+
+        // 4. 空文本
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isMainlyChinese(""))
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isMainlyChinese("   "))
+    }
+
+    @Test
+    fun testGibberishAndNoiseFiltering() {
+        // 1. Latin OCR 误识别中文产生的脱字符及非自然符号乱码 -> 必须判定为乱码并过滤
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("ETA^-D ARS 器 LGithub"))
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("^_~"))
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("~^|\\_"))
+
+        // 2. 纯标点、空白噪点 -> 过滤
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise(""))
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("   "))
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("..."))
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("- - -"))
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("."))
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise(">"))
+
+        // 3. 正常文本与标题 -> 绝不能被误判为乱码
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("Thought for 35s >"))
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("Hello, world!"))
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("System Architecture Overview"))
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("思考过程"))
+    }
+
+    @Test
+    fun testDominantColorExtractionAndPureWhiteSnap() {
+        // 模拟白底卡片采样像素（大量接近纯白的像素 + 少量反走样灰色 + 少量深色文字像素）
+        val pixels = mutableListOf<Int>()
+        val rgbFunc = com.puretrans.app.ui.image.ImageTranslateProcessor::rgb
+        // 80 个纯白卡片像素 (255, 255, 255)
+        repeat(80) { pixels.add(rgbFunc(255, 255, 255)) }
+        // 10 个压缩轻微噪点 (250, 250, 250)
+        repeat(10) { pixels.add(rgbFunc(250, 250, 250)) }
+        // 5 个抗锯齿半透明灰 (210, 210, 210)
+        repeat(5) { pixels.add(rgbFunc(210, 210, 210)) }
+        // 5 个文字深色 (30, 30, 30)
+        repeat(5) { pixels.add(rgbFunc(30, 30, 30)) }
+
+        val (bgColor, textColor) = com.puretrans.app.ui.image.ImageTranslateProcessor.sampleDominantColorFromPixels(pixels)
+
+        // 验证：触发纯白吸附，彻底消除灰膏药，输出纯白底色与深色文字！
+        assertEquals(rgbFunc(255, 255, 255), bgColor)
+        assertEquals(rgbFunc(18, 18, 18), textColor)
+    }
+
+    @Test
+    fun testDominantColorExtractionDarkMode() {
+        val rgbFunc = com.puretrans.app.ui.image.ImageTranslateProcessor::rgb
+        // 模拟深色模式暗黑卡片背景（大量 18, 18, 18 像素 + 少量浅色文字）
+        val pixels = mutableListOf<Int>()
+        repeat(85) { pixels.add(rgbFunc(18, 18, 18)) }
+        repeat(10) { pixels.add(rgbFunc(22, 22, 22)) }
+        repeat(5) { pixels.add(rgbFunc(240, 240, 240)) }
+
+        val (bgColor, textColor) = com.puretrans.app.ui.image.ImageTranslateProcessor.sampleDominantColorFromPixels(pixels)
+
+        assertEquals(rgbFunc(18, 18, 18), bgColor)
+        assertEquals(rgbFunc(245, 245, 245), textColor)
+    }
+
+    @Test
+    fun testParagraphClusteringTwoColumnsSeparation() {
+        // 两栏排版：左栏和右栏在垂直方向上虽然高度重叠，但水平 X 完全错开（左栏 50~200，右栏 400~550）
+        val colLeft1 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine("Left column line 1", 50, 100, 200, 130)
+        val colLeft2 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine("Left column line 2", 50, 135, 200, 165)
+        val colRight1 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine("Right column line 1", 400, 100, 550, 130)
+
+        val clusters = com.puretrans.app.ui.image.ImageTranslateProcessor.clusterLinesIntoParagraphs(listOf(colLeft1, colRight1, colLeft2))
+        // 验证两栏不被混淆合并
+        assertTrue(clusters.size >= 2)
+    }
+
+    @Test
+    fun testParagraphClusteringEmptyAndSingleLine() {
+        val emptyClusters = com.puretrans.app.ui.image.ImageTranslateProcessor.clusterLinesIntoParagraphs(emptyList())
+        assertTrue(emptyClusters.isEmpty())
+
+        val singleLine = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine("Just a title", 10, 10, 100, 30)
+        val singleCluster = com.puretrans.app.ui.image.ImageTranslateProcessor.clusterLinesIntoParagraphs(listOf(singleLine))
+        assertEquals(1, singleCluster.size)
+        assertEquals(1, singleCluster[0].lineCount)
+        assertEquals("Just a title", singleCluster[0].text)
+    }
+
+    @Test
+    fun testGibberishFilteringWithHyphenatedEnglish() {
+        // 包含正常连字符的英文句子绝不能被误判为乱码
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("State-of-the-art neural network architecture"))
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("real-time translation system"))
+        assertFalse(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("high-quality text output"))
+
+        // 特殊乱码符号组合被正确过滤
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("~^"))
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isGibberishOrNoise("ETA^-D"))
+    }
 }
+
 
