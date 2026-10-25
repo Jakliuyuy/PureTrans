@@ -134,10 +134,11 @@ fun ImageOverlayCanvas(
 
                     // C. 若当前文字块被选中，绘制紧凑贴合的 Material 优雅高亮边框
                     if (selectedBlock?.id == block.id) {
+                        val expand = (2.5f * scale).coerceIn(2f, 5f)
                         drawRoundRect(
                             color = Color(0xFF2196F3),
-                            topLeft = Offset(left - 2, top - 2),
-                            size = Size(maskWidth + 4, height + 4),
+                            topLeft = Offset(left - expand - 2f, top - expand - 2f),
+                            size = Size(maskWidth + 4f, height + expand * 2f + 4f),
                             cornerRadius = CornerRadius(6f * scale, 6f * scale),
                             style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f * scale)
                         )

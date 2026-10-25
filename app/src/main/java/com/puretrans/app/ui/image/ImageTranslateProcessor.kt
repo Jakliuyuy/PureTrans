@@ -112,7 +112,12 @@ object ImageTranslateProcessor {
         var letterOrDigitOrCjkCount = 0
         var symbolCount = 0
         for (ch in trimmed) {
-            if (ch.isLetterOrDigit() || Character.isIdeographic(ch.code)) {
+            val isCjk = Character.UnicodeBlock.of(ch.code).let {
+                it == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS ||
+                it == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS ||
+                it == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
+            }
+            if (isCjk || ch.isLetterOrDigit()) {
                 letterOrDigitOrCjkCount++
             } else if (!ch.isWhitespace()) {
                 symbolCount++
@@ -125,23 +130,28 @@ object ImageTranslateProcessor {
         // 极短且带符号的噪点（如单个符号或标点）
         if (letterOrDigitOrCjkCount <= 1 && trimmed.length <= 2 && symbolCount > 0) return true
 
-        // 异常标点符号比率过高（例如标点占比超过 50%）
+        // 异常标点符号比率过高（例如标点占比超过 40%）
         val totalChars = letterOrDigitOrCjkCount + symbolCount
-        if (totalChars > 2 && symbolCount.toFloat() / totalChars > 0.5f) return true
+        if (totalChars > 2 && symbolCount.toFloat() / totalChars > 0.4f) return true
 
-        // Latin OCR 识别中文常出现的脱字符乱码特征 (如 ETA^-D, ~^ 等)
-        if (trimmed.contains("^-") || trimmed.contains("^_") || trimmed.contains("~^")) return true
+        // Latin OCR 识别中文常出现的脱字符及非自然杂凑符号 (如 ETA^-D, ~^, ^_, ||, 等)
+        if (trimmed.contains("^-") || trimmed.contains("^_") || trimmed.contains("~^") ||
+            trimmed.contains("||") || trimmed.contains("|\\") || trimmed.contains("/|")) return true
 
         return false
     }
 
     /**
-     * 判断文本是否主要由中文汉字组成（用于保护原图中文）
+     * 判断文本是否属于中文或 Latin OCR 误识别中文（用于保护原图中文）
      */
     fun isMainlyChinese(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return false
+
         var cjkCount = 0
         var latinCount = 0
-        for (cp in text.codePoints()) {
+        var uppercaseCount = 0
+        for (cp in trimmed.codePoints()) {
             val ub = Character.UnicodeBlock.of(cp)
             if (ub == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS ||
                 ub == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS ||
@@ -149,11 +159,22 @@ object ImageTranslateProcessor {
                 cjkCount++
             } else if (Character.isLetter(cp)) {
                 latinCount++
+                if (Character.isUpperCase(cp)) uppercaseCount++
             }
         }
         if (cjkCount == 0) return false
-        // 包含汉字且汉字占主体或无英文字母
-        return (cjkCount >= 2 && cjkCount >= latinCount * 0.4) || (cjkCount >= 1 && latinCount == 0)
+
+        // 1. 包含汉字且汉字占主体（例如纯中文或中文夹杂少量数字/英文代号）
+        if ((cjkCount >= 2 && cjkCount >= latinCount * 0.4) || (cjkCount >= 1 && latinCount == 0)) {
+            return true
+        }
+
+        // 2. Latin OCR 误识别特征：包含汉字，同时拉丁字母大部分为零散大写杂串 (如 "ETA ARS 器 LGithub")
+        if (cjkCount >= 1 && latinCount > 0 && (uppercaseCount.toFloat() / latinCount) >= 0.55f) {
+            return true
+        }
+
+        return false
     }
 
     /**
@@ -176,9 +197,9 @@ object ImageTranslateProcessor {
             return false
         }
 
-        // 2. 字号一致性检查：同一段落正文字号相近
+        // 2. 字号一致性检查：同一段落正文字号相近 (阈值收紧至 35%，防止误吞标题)
         val hDiffRatio = kotlin.math.abs(h1 - h2).toFloat() / kotlin.math.max(h1, h2)
-        if (hDiffRatio > 0.45f) {
+        if (hDiffRatio > 0.35f) {
             return false
         }
 
@@ -196,9 +217,22 @@ object ImageTranslateProcessor {
             return false
         }
 
+        // 两栏中心距离过远隔离
+        val centerBox = (clusterBox.left + clusterBox.right) / 2
+        val centerCurrent = (currentLine.left + currentLine.right) / 2
+        val maxW = kotlin.math.max(clusterBox.width, currentLine.width)
+        if (kotlin.math.abs(centerBox - centerCurrent) > maxW * 0.9f && !hasSufficientOverlap) {
+            return false
+        }
+
         // 4. 独立标题/导航守护规则（如 "Thought for 35s >"）
         val prevTextTrimmed = prevLine.text.trim()
         if (prevTextTrimmed.endsWith(">") || prevTextTrimmed.endsWith("»") || prevTextTrimmed.endsWith("→")) {
+            return false
+        }
+
+        // 5. 独立短标题防吞规则：若前一行明显短于当前行且长度较短，不吞并为正文首行
+        if (prevLine.width < currentLine.width * 0.60f && prevTextTrimmed.length <= 35 && vGap > avgH * 0.45f) {
             return false
         }
 
@@ -213,51 +247,156 @@ object ImageTranslateProcessor {
 
     /**
      * 将识别到的多行按几何与排版特征聚类为段落（Paragraph / Block Clustering）
+     * 采用空间邻接图与连通分量，杜绝一维排序在多栏或交错布局下切碎段落的严重缺陷
      */
     fun clusterLinesIntoParagraphs(lines: List<RawTextLine>): List<ParagraphCluster> {
-        if (lines.isEmpty()) return emptyList()
+        val validLines = lines.filter { it.text.trim().isNotEmpty() && it.width > 0 && it.height > 0 }
+        if (validLines.isEmpty()) return emptyList()
+        if (validLines.size == 1) {
+            val line = validLines[0]
+            return listOf(
+                ParagraphCluster(
+                    lines = listOf(line),
+                    text = line.text.trim(),
+                    rect = line.rect
+                )
+            )
+        }
 
-        val sortedLines = lines.sortedWith(compareBy({ it.top }, { it.left }))
-
-        val clusters = mutableListOf<ParagraphCluster>()
-        var currentClusterLines = mutableListOf<RawTextLine>()
-        var currentBox: BoxBounds? = null
-
-        for (line in sortedLines) {
-            val textTrimmed = line.text.trim()
-            if (textTrimmed.isEmpty() || line.width <= 0 || line.height <= 0) continue
-
-            if (currentClusterLines.isEmpty()) {
-                currentClusterLines.add(line)
-                currentBox = BoxBounds(line.left, line.top, line.right, line.bottom)
-            } else {
-                val prevLine = currentClusterLines.last()
-                val box = currentBox!!
-
-                if (canMergeLines(prevLine, line, box)) {
-                    currentClusterLines.add(line)
-                    box.left = kotlin.math.min(box.left, line.left)
-                    box.top = kotlin.math.min(box.top, line.top)
-                    box.right = kotlin.math.max(box.right, line.right)
-                    box.bottom = kotlin.math.max(box.bottom, line.bottom)
-                } else {
-                    clusters.add(createClusterFromLines(currentClusterLines, box))
-                    currentClusterLines = mutableListOf(line)
-                    currentBox = BoxBounds(line.left, line.top, line.right, line.bottom)
-                }
+        val n = validLines.size
+        val parent = IntArray(n) { it }
+        fun find(i: Int): Int {
+            var root = i
+            while (root != parent[root]) {
+                root = parent[root]
+            }
+            var curr = i
+            while (curr != root) {
+                val nxt = parent[curr]
+                parent[curr] = root
+                curr = nxt
+            }
+            return root
+        }
+        fun union(i: Int, j: Int) {
+            val rootI = find(i)
+            val rootJ = find(j)
+            if (rootI != rootJ) {
+                parent[rootJ] = rootI
             }
         }
 
-        if (currentClusterLines.isNotEmpty() && currentBox != null) {
-            clusters.add(createClusterFromLines(currentClusterLines, currentBox))
+        for (i in 0 until n) {
+            val upper = validLines[i]
+            var bestJ = -1
+            var minVGap = Float.MAX_VALUE
+
+            for (j in 0 until n) {
+                if (i == j) continue
+                val lower = validLines[j]
+
+                val vGap = (lower.top - upper.bottom).toFloat()
+                val avgH = (upper.height + lower.height) / 2.0f
+
+                if (vGap < -avgH * 0.4f || vGap > avgH * 1.35f) continue
+                val hDiffRatio = kotlin.math.abs(upper.height - lower.height).toFloat() / kotlin.math.max(upper.height, lower.height)
+                if (hDiffRatio > 0.35f) continue
+
+                val upperTextTrimmed = upper.text.trim()
+                if (upperTextTrimmed.endsWith(">") || upperTextTrimmed.endsWith("»") || upperTextTrimmed.endsWith("→")) {
+                    continue
+                }
+                if (upper.width < lower.width * 0.60f && upperTextTrimmed.length <= 35 && vGap > avgH * 0.45f) {
+                    continue
+                }
+
+                val overlapLeft = kotlin.math.max(upper.left, lower.left)
+                val overlapRight = kotlin.math.min(upper.right, lower.right)
+                val overlapWidth = kotlin.math.max(0, overlapRight - overlapLeft)
+                val shorterWidth = kotlin.math.min(upper.width, lower.width)
+
+                val leftDiff = kotlin.math.abs(upper.left - lower.left)
+                val isLeftAligned = leftDiff <= avgH * 1.5f
+                val hasSufficientOverlap = shorterWidth > 0 && (overlapWidth.toFloat() / shorterWidth) >= 0.35f
+
+                if (!isLeftAligned && !hasSufficientOverlap) continue
+
+                val centerUpper = (upper.left + upper.right) / 2
+                val centerLower = (lower.left + lower.right) / 2
+                val maxW = kotlin.math.max(upper.width, lower.width)
+                if (kotlin.math.abs(centerUpper - centerLower) > maxW * 0.9f && !hasSufficientOverlap) {
+                    continue
+                }
+
+                var occluded = false
+                for (k in 0 until n) {
+                    if (k == i || k == j) continue
+                    val other = validLines[k]
+                    if (other.top >= upper.bottom - 2 && other.bottom <= lower.top + 2) {
+                        val oLeft = kotlin.math.max(overlapLeft, other.left)
+                        val oRight = kotlin.math.min(overlapRight, other.right)
+                        if (oRight > oLeft) {
+                            occluded = true
+                            break
+                        }
+                    }
+                }
+                if (occluded) continue
+
+                if (vGap < minVGap) {
+                    minVGap = vGap
+                    bestJ = j
+                }
+            }
+
+            if (bestJ != -1) {
+                union(i, bestJ)
+            }
         }
 
-        return clusters
+        val groups = mutableMapOf<Int, MutableList<RawTextLine>>()
+        for (idx in 0 until n) {
+            val root = find(idx)
+            groups.getOrPut(root) { mutableListOf() }.add(validLines[idx])
+        }
+
+        val clusters = mutableListOf<ParagraphCluster>()
+        for ((_, groupLines) in groups) {
+            val sortedGroup = groupLines.sortedWith(compareBy({ it.top }, { it.left }))
+            val minLeft = sortedGroup.minOf { it.left }
+            val minTop = sortedGroup.minOf { it.top }
+            val maxRight = sortedGroup.maxOf { it.right }
+            val maxBottom = sortedGroup.maxOf { it.bottom }
+            clusters.add(
+                createClusterFromLines(
+                    sortedGroup,
+                    BoxBounds(minLeft, minTop, maxRight, maxBottom)
+                )
+            )
+        }
+
+        return clusters.sortedWith(compareBy({ it.top }, { it.left }))
     }
 
     private fun createClusterFromLines(lines: List<RawTextLine>, box: BoxBounds): ParagraphCluster {
-        val mergedText = lines.joinToString(" ") { it.text.trim() }
-            .replace(" - ", "-")
+        val sb = StringBuilder()
+        for (line in lines) {
+            val t = line.text.trim()
+            if (t.isEmpty()) continue
+            if (sb.isEmpty()) {
+                sb.append(t)
+            } else {
+                val lastChar = sb.last()
+                if (lastChar == '-' && sb.length >= 2 && sb[sb.length - 2].isLetter()) {
+                    // 单词折行连字符（如 "architec-" + "ture" -> "architecture"）
+                    sb.deleteCharAt(sb.length - 1)
+                    sb.append(t)
+                } else {
+                    sb.append(" ").append(t)
+                }
+            }
+        }
+        val mergedText = sb.toString()
             .replace("\\s+".toRegex(), " ")
             .trim()
         return ParagraphCluster(
@@ -470,66 +609,98 @@ object ImageTranslateProcessor {
 
     /**
      * 纯算法：从采样像素集合中提取直方图众数高精度主导背景色与文字色
+     * 优先采用精确像素众数，保证白底卡片、暗黑底色、浅灰卡片色 1:1 无痕提取
      */
     fun sampleDominantColorFromPixels(pixels: List<Int>): Pair<Int, Int> {
         if (pixels.isEmpty()) {
             return Pair(rgb(255, 255, 255), rgb(20, 20, 20))
         }
 
-        val binCounts = mutableMapOf<Int, Int>()
+        // 1. 统计精确 ARGB 颜色频次
+        val exactCounts = mutableMapOf<Int, Int>()
         for (p in pixels) {
-            val r = colorRed(p) ushr 3
-            val g = colorGreen(p) ushr 3
-            val b = colorBlue(p) ushr 3
-            val bin = (r shl 10) or (g shl 5) or b
-            binCounts[bin] = (binCounts[bin] ?: 0) + 1
+            val opaque = (0xFF shl 24) or (p and 0x00FFFFFF)
+            exactCounts[opaque] = (exactCounts[opaque] ?: 0) + 1
         }
 
-        var maxCount = -1
-        var dominantBin = 0
-        for ((bin, count) in binCounts) {
-            if (count > maxCount) {
-                maxCount = count
-                dominantBin = bin
+        var maxExactCount = -1
+        var dominantExactColor = pixels[0]
+        for ((c, cnt) in exactCounts) {
+            if (cnt > maxExactCount) {
+                maxExactCount = cnt
+                dominantExactColor = c
             }
         }
 
-        var rSum = 0L
-        var gSum = 0L
-        var bSum = 0L
-        var validCount = 0
-
-        val targetR = (dominantBin shr 10) and 0x1F
-        val targetG = (dominantBin shr 5) and 0x1F
-        val targetB = dominantBin and 0x1F
-
-        for (p in pixels) {
-            val r5 = colorRed(p) ushr 3
-            val g5 = colorGreen(p) ushr 3
-            val b5 = colorBlue(p) ushr 3
-            if (kotlin.math.abs(r5 - targetR) <= 1 &&
-                kotlin.math.abs(g5 - targetG) <= 1 &&
-                kotlin.math.abs(b5 - targetB) <= 1) {
-                rSum += colorRed(p)
-                gSum += colorGreen(p)
-                bSum += colorBlue(p)
-                validCount++
+        val totalPixels = pixels.size
+        val finalBgColor = if (maxExactCount.toFloat() / totalPixels >= 0.25f) {
+            // 精确颜色占比超过 25%，说明背景为单一纯色（如纯白、卡片微灰或纯黑），直接 100% 精确采纳
+            val r = colorRed(dominantExactColor)
+            val g = colorGreen(dominantExactColor)
+            val b = colorBlue(dominantExactColor)
+            if (r >= 250 && g >= 250 && b >= 250 && kotlin.math.abs(r - g) <= 3 && kotlin.math.abs(r - b) <= 3) {
+                rgb(255, 255, 255)
+            } else if (r <= 20 && g <= 20 && b <= 20 && kotlin.math.abs(r - g) <= 3 && kotlin.math.abs(r - b) <= 3) {
+                rgb(18, 18, 18)
+            } else {
+                dominantExactColor
             }
-        }
-
-        val avgR = if (validCount > 0) (rSum / validCount).toInt() else (targetR shl 3) + 4
-        val avgG = if (validCount > 0) (gSum / validCount).toInt() else (targetG shl 3) + 4
-        val avgB = if (validCount > 0) (bSum / validCount).toInt() else (targetB shl 3) + 4
-
-        // 纯净色吸附：白底卡片或暗黑底色吸附，彻底消除灰膏药
-        val finalBgColor = if (avgR >= 242 && avgG >= 242 && avgB >= 242 &&
-            kotlin.math.abs(avgR - avgG) <= 5 && kotlin.math.abs(avgR - avgB) <= 5) {
-            rgb(255, 255, 255)
-        } else if (avgR <= 25 && avgG <= 25 && avgB <= 25 &&
-            kotlin.math.abs(avgR - avgG) <= 4 && kotlin.math.abs(avgR - avgB) <= 4) {
-            rgb(18, 18, 18)
         } else {
-            rgb(avgR.coerceIn(0, 255), avgG.coerceIn(0, 255), avgB.coerceIn(0, 255))
+            // 图片包含连续噪点或渐变，降维到 5-bit 直方图聚类
+            val binCounts = mutableMapOf<Int, Int>()
+            for (p in pixels) {
+                val r = colorRed(p) ushr 3
+                val g = colorGreen(p) ushr 3
+                val b = colorBlue(p) ushr 3
+                val bin = (r shl 10) or (g shl 5) or b
+                binCounts[bin] = (binCounts[bin] ?: 0) + 1
+            }
+
+            var maxBinCount = -1
+            var dominantBin = 0
+            for ((bin, count) in binCounts) {
+                if (count > maxBinCount) {
+                    maxBinCount = count
+                    dominantBin = bin
+                }
+            }
+
+            var rSum = 0L
+            var gSum = 0L
+            var bSum = 0L
+            var validCount = 0
+
+            val targetR = (dominantBin shr 10) and 0x1F
+            val targetG = (dominantBin shr 5) and 0x1F
+            val targetB = dominantBin and 0x1F
+
+            for (p in pixels) {
+                val r5 = colorRed(p) ushr 3
+                val g5 = colorGreen(p) ushr 3
+                val b5 = colorBlue(p) ushr 3
+                if (kotlin.math.abs(r5 - targetR) <= 1 &&
+                    kotlin.math.abs(g5 - targetG) <= 1 &&
+                    kotlin.math.abs(b5 - targetB) <= 1) {
+                    rSum += colorRed(p)
+                    gSum += colorGreen(p)
+                    bSum += colorBlue(p)
+                    validCount++
+                }
+            }
+
+            val avgR = if (validCount > 0) (rSum / validCount).toInt() else (targetR shl 3) + 4
+            val avgG = if (validCount > 0) (gSum / validCount).toInt() else (targetG shl 3) + 4
+            val avgB = if (validCount > 0) (bSum / validCount).toInt() else (targetB shl 3) + 4
+
+            if (avgR >= 248 && avgG >= 248 && avgB >= 248 &&
+                kotlin.math.abs(avgR - avgG) <= 4 && kotlin.math.abs(avgR - avgB) <= 4) {
+                rgb(255, 255, 255)
+            } else if (avgR <= 20 && avgG <= 20 && avgB <= 20 &&
+                kotlin.math.abs(avgR - avgG) <= 3 && kotlin.math.abs(avgR - avgB) <= 3) {
+                rgb(18, 18, 18)
+            } else {
+                rgb(avgR.coerceIn(0, 255), avgG.coerceIn(0, 255), avgB.coerceIn(0, 255))
+            }
         }
 
         val lumR = colorRed(finalBgColor)

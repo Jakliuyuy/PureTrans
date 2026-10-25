@@ -119,7 +119,8 @@ object ImageOverlayRenderer {
 
         // 单行独立标题场景 (lineCount == 1 且文本较短)
         if (originalLineCount == 1 && text.length <= 25) {
-            val baseSize = (boxHeight * 0.68f).coerceIn(12f * scale, 32f * scale)
+            val minTitleSize = min(8f * scale, boxHeight * 0.5f)
+            val baseSize = (boxHeight * 0.68f).coerceIn(minTitleSize, 32f * scale)
             textPaint.textSize = baseSize
             val singleLineWidth = textPaint.measureText(text)
 
@@ -129,7 +130,7 @@ object ImageOverlayRenderer {
             } else {
                 // 超出一行：微调字号保持单行，若过小则允许折为两行
                 val fittedSize = (availWidth / singleLineWidth) * baseSize
-                if (fittedSize >= 11f * scale) {
+                if (fittedSize >= minTitleSize) {
                     textPaint.textSize = fittedSize
                     return buildStaticLayout(text, textPaint, widthInt)
                 }
@@ -138,8 +139,8 @@ object ImageOverlayRenderer {
 
         // 多行段落场景 (Paragraph Block)
         val avgLineH = boxHeight / max(1, originalLineCount).toFloat()
-        val maxSize = min(availHeight * 0.85f, max(12f * scale, avgLineH * 0.82f))
-        val minSize = 9f * scale
+        val maxSize = min(availHeight * 0.85f, max(10f * scale, avgLineH * 0.82f))
+        val minSize = min(8f * scale, maxSize * 0.5f)
 
         var low = minSize
         var high = maxSize
@@ -150,21 +151,27 @@ object ImageOverlayRenderer {
             return bestLayout
         }
 
+        textPaint.textSize = minSize
+        var fallbackLayout = buildStaticLayout(text, textPaint, widthInt)
+        var foundValid = false
+
         // 二分搜索使得 StaticLayout 高度恰好在 availHeight 内
-        for (iter in 0..6) {
+        for (iter in 0..7) {
             val mid = (low + high) / 2f
             textPaint.textSize = mid
             val testLayout = buildStaticLayout(text, textPaint, widthInt)
 
             if (testLayout.height <= availHeight) {
                 bestLayout = testLayout
+                foundValid = true
                 low = mid // 尝试更大字号
             } else {
+                fallbackLayout = testLayout
                 high = mid // 超出高度，减小字号
             }
         }
 
-        return bestLayout
+        return if (foundValid) bestLayout else fallbackLayout
     }
 
     private fun buildStaticLayout(text: String, textPaint: TextPaint, width: Int): StaticLayout {

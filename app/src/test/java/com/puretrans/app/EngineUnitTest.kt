@@ -916,8 +916,116 @@ class EngineUnitTest {
         val colRight1 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine("Right column line 1", 400, 100, 550, 130)
 
         val clusters = com.puretrans.app.ui.image.ImageTranslateProcessor.clusterLinesIntoParagraphs(listOf(colLeft1, colRight1, colLeft2))
-        // 验证两栏不被混淆合并
-        assertTrue(clusters.size >= 2)
+        // 严格验证：必须聚类为刚好 2 个块（左栏 2 行合并为 1 块，右栏 1 行自成 1 块），绝不拆碎！
+        assertEquals(2, clusters.size)
+        val leftCluster = clusters.find { it.lines.any { l -> l.text == "Left column line 1" } }!!
+        assertEquals(2, leftCluster.lineCount)
+        assertTrue(leftCluster.text.contains("Left column line 1 Left column line 2"))
+
+        val rightCluster = clusters.find { it.lines.any { l -> l.text == "Right column line 1" } }!!
+        assertEquals(1, rightCluster.lineCount)
+    }
+
+    @Test
+    fun testParagraphClusteringTwoColumnsInterleavedMultiLines() {
+        // 两栏交织排版：左栏 3 行，右栏 3 行，在 Y 轴互相交叠
+        val left1 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine("Left col line 1", 50, 100, 200, 120)
+        val right1 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine("Right col line 1", 300, 105, 450, 125)
+        val left2 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine("Left col line 2", 50, 128, 200, 148)
+        val right2 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine("Right col line 2", 300, 133, 450, 153)
+        val left3 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine("Left col line 3", 50, 156, 200, 176)
+        val right3 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine("Right col line 3", 300, 161, 450, 181)
+
+        val clusters = com.puretrans.app.ui.image.ImageTranslateProcessor.clusterLinesIntoParagraphs(
+            listOf(left1, right1, left2, right2, left3, right3)
+        )
+
+        assertEquals(2, clusters.size)
+        val leftBlock = clusters.find { it.lines.first().text.startsWith("Left") }!!
+        assertEquals(3, leftBlock.lineCount)
+        val rightBlock = clusters.find { it.lines.first().text.startsWith("Right") }!!
+        assertEquals(3, rightBlock.lineCount)
+    }
+
+    @Test
+    fun testIndependentHeaderWithBodyNotSwallowed() {
+        // 模拟图 2 关键场景：
+        // 1 句中间独立短标题 (width 320, 长度 28 字符)
+        // 紧接着是 6 行连续的正文段落 (width 600, 满行)
+        val title = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+            text = "System Architecture Overview",
+            left = 100,
+            top = 100,
+            right = 420,
+            bottom = 126
+        )
+        val bodyLines = (0 until 6).map { i ->
+            com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+                text = "Continuous deep explanation line number $i describing the comprehensive pipeline",
+                left = 100,
+                top = 142 + i * 26,
+                right = 700,
+                bottom = 164 + i * 26
+            )
+        }
+
+        val allLines = listOf(title) + bodyLines
+        val clusters = com.puretrans.app.ui.image.ImageTranslateProcessor.clusterLinesIntoParagraphs(allLines)
+
+        // 验证：中间标题保持独立，6 行正文合并为 1 个大块，绝不允许标题被正文吞噬！
+        assertEquals(2, clusters.size)
+        assertEquals("System Architecture Overview", clusters[0].text)
+        assertEquals(1, clusters[0].lineCount)
+
+        assertEquals(6, clusters[1].lineCount)
+        assertTrue(clusters[1].text.startsWith("Continuous deep explanation line number 0"))
+        assertTrue(clusters[1].text.endsWith("pipeline"))
+    }
+
+    @Test
+    fun testHyphenatedWordJoiningInParagraph() {
+        // 单词在行末折行带连字符，合并时应去除连字符自然连接
+        val line1 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+            text = "Modern software architec-",
+            left = 50,
+            top = 50,
+            right = 400,
+            bottom = 74
+        )
+        val line2 = com.puretrans.app.ui.image.ImageTranslateProcessor.RawTextLine(
+            text = "ture requires high resilience.",
+            left = 50,
+            top = 80,
+            right = 400,
+            bottom = 104
+        )
+
+        val clusters = com.puretrans.app.ui.image.ImageTranslateProcessor.clusterLinesIntoParagraphs(listOf(line1, line2))
+        assertEquals(1, clusters.size)
+        assertEquals("Modern software architecture requires high resilience.", clusters[0].text)
+    }
+
+    @Test
+    fun testCardSubtleGrayBackgroundColorNotForcedToPureWhite() {
+        // 模拟 GitHub/ChatGPT 常见的微灰卡片底色 (244, 244, 245)
+        val rgbFunc = com.puretrans.app.ui.image.ImageTranslateProcessor::rgb
+        val cardColor = rgbFunc(244, 244, 245)
+        val pixels = mutableListOf<Int>()
+        repeat(80) { pixels.add(cardColor) }
+        repeat(10) { pixels.add(rgbFunc(240, 240, 240)) }
+        repeat(10) { pixels.add(rgbFunc(30, 30, 30)) }
+
+        val (bgColor, _) = com.puretrans.app.ui.image.ImageTranslateProcessor.sampleDominantColorFromPixels(pixels)
+
+        // 验证：必须精准提取原图卡片色 (244, 244, 245)，绝不能被粗暴吸附成纯白 (255, 255, 255) 造成白色贴纸补丁！
+        assertEquals(cardColor, bgColor)
+    }
+
+    @Test
+    fun testLatinOcrChineseMisrecognitionFiltered() {
+        // Latin OCR 识别中文常误报为带单个汉字及大写字母的乱码串，目标语为中文时必须识别并保护
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isMainlyChinese("ETA ARS 器 LGithub"))
+        assertTrue(com.puretrans.app.ui.image.ImageTranslateProcessor.isMainlyChinese("T-D ARS 百度 网盘"))
     }
 
     @Test
