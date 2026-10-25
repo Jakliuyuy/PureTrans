@@ -182,7 +182,7 @@ fun SettingsScreen(
                 value = uiState.backendUrl,
                 onValueChange = onBackendUrlChanged,
                 label = { Text("后端反代端点 URL") },
-                placeholder = { Text("https://api.yourdomain.com/google-translate") },
+                placeholder = { Text("https://api.74520.xyz/google-translate") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp)

@@ -95,7 +95,7 @@ class SettingsManager(context: Context) {
         const val KEY_BACKEND_URL = "custom_backend_url"
         const val KEY_BACKEND_TOKEN = "custom_backend_token"
 
-        const val DEFAULT_BACKEND_URL = "https://api.yourdomain.com/google-translate"
+        const val DEFAULT_BACKEND_URL = "https://api.74520.xyz/google-translate"
         const val DEFAULT_BACKEND_TOKEN = "MySecretPin888"
 
         @Volatile

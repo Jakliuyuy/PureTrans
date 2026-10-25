@@ -31,8 +31,15 @@ class GoogleBackendFallbackEngine(
     ): TranslationResult = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
 
+        // 若用户端点仍为默认示例占位域名，自动纠偏为当前真实服务器可用端点
+        val effectiveUrl = if (backendUrl.contains("yourdomain.com")) {
+            "https://api.74520.xyz/google-translate"
+        } else {
+            backendUrl
+        }
+
         // 优先尝试配置的自建反代后端端点
-        val result = tryRequest(backendUrl, backendToken, text, sourceLang, targetLang, startTime)
+        val result = tryRequest(effectiveUrl, backendToken, text, sourceLang, targetLang, startTime)
         if (result != null && result.isSuccess) {
             return@withContext result
         }
