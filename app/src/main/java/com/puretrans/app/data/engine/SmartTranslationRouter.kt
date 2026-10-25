@@ -66,18 +66,14 @@ class SmartTranslationRouter(
                             com.puretrans.app.util.LanguageDetector.detectLanguage(transText) == Language.EN)
 
             val currentPhonetic = rawResult.phonetic
-            val enrichedPhonetic = when {
-                !currentPhonetic.isNullOrBlank() -> {
-                    if (isTargetEnglish) com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic(currentPhonetic, true)
-                    else currentPhonetic
-                }
-                isTargetEnglish -> {
-                    com.puretrans.app.util.PhoneticHelper.fetchEnglishPhonetic(transText)
-                }
-                else -> null
+            val enrichedPhonetic = if (isTargetEnglish) {
+                val formattedExisting = com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic(currentPhonetic, true)
+                formattedExisting ?: com.puretrans.app.util.PhoneticHelper.fetchEnglishPhonetic(transText)
+            } else {
+                currentPhonetic?.takeIf { it.isNotBlank() }
             }
 
-            if (!enrichedPhonetic.isNullOrBlank() && enrichedPhonetic != currentPhonetic) {
+            if (enrichedPhonetic != currentPhonetic) {
                 rawResult.copy(phonetic = enrichedPhonetic)
             } else {
                 rawResult

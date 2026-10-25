@@ -13,11 +13,17 @@ object PhoneticHelper {
 
     private val cache = ConcurrentHashMap<String, String>()
 
-    // 匹配英式/美式音标典型标记（如倒e(ə)、重音符号(ˈˌ)、长音符号(ː)、IPA特定元音/辅音(ʊ, ɪ, ʌ, æ, θ, ð, ʃ, ʒ, ŋ)等）
-    private val IPA_MARKER_REGEX = Regex("[əʊɪʌæːˈˌθðʃʒŋ]")
+    // 匹配英式/美式音标典型标记（如倒e(ə)、重音符号(ˈˌ)、长音符号(ː)、IPA特定元音/辅音(ʊ, ɪ, ʌ, æ, θ, ð, ʃ, ʒ, ŋ, ɜ, ɝ, ɑ, ɒ, ɔ, ɡ)等）
+    private val IPA_MARKER_REGEX = Regex("[əʊɪʌæːˈˌθðʃʒŋɜɝɑɒɔɡ]")
 
-    // 匹配常见汉语拼音声调字符
-    private val PINYIN_TONE_REGEX = Regex("[āáǎàóǒòēéěèīíǐìūúǔùǖǘǚǜĀÁǍÀÓǑÒĒÉĚÈĪÍǏÌŪÚǓÙǕǗǙǛ]")
+    // 匹配汉语拼音特有声调字符（二声、三声、四声以及带有声调的 ü 等，英文音标绝对不会出现这些符号）
+    private val PINYIN_DISTINCTIVE_TONE_REGEX = Regex("[áǎàóǒòéěèíǐìúǔùǖǘǚǜüÜÁǍÀÓǑÒÉĚÈÍǏÌÚǓÙǕǗǙǛ]")
+
+    // 匹配所有汉语拼音声调字符（含平调宏音符 ā ē ī ō ū）
+    private val ALL_PINYIN_TONE_REGEX = Regex("[āáǎàōóǒòēéěèīíǐìūúǔùǖǘǚǜĀÁǍÀŌÓǑÒĒÉĚÈĪÍǏÌŪÚǓÙǕǗǙǛ]")
+
+    // 匹配英文长元音宏音符 (macron)
+    private val MACRON_REGEX = Regex("[āēīōūĀĒĪŌŪ]")
 
     private val defaultClient by lazy {
         OkHttpClient.Builder()
@@ -30,37 +36,65 @@ object PhoneticHelper {
      * 判断字符串是否具有明显的英文音标特征（如包含倒e(ə)、重音符号ˈˌ、IPA特定符号）
      */
     fun isLikelyEnglishPhonetic(text: String): Boolean {
+        if (text.isBlank()) return false
+        if (LanguageDetector.containsChinese(text)) return false
+        // 包含二三四声或 ü 等拼音特征字符，绝非英文音标
+        if (PINYIN_DISTINCTIVE_TONE_REGEX.containsMatchIn(text)) return false
+
         if (IPA_MARKER_REGEX.containsMatchIn(text)) return true
         val trimmed = text.trim()
-        return (trimmed.startsWith("[") && trimmed.endsWith("]")) ||
-                (trimmed.startsWith("/") && trimmed.endsWith("/"))
+        if ((trimmed.startsWith("[") && trimmed.endsWith("]")) ||
+            (trimmed.startsWith("/") && trimmed.endsWith("/"))) {
+            return true
+        }
+
+        // 兼容单音节英文音标转写（例如包含长元音宏音符如 hōm, ɡō, sē，且为纯拉丁音标结构）
+        if (MACRON_REGEX.containsMatchIn(trimmed) && trimmed.matches(Regex("^[a-zA-Zɡˈˌːāēīōū\\s\\(\\)\\-']+$"))) {
+            return true
+        }
+
+        return false
     }
 
     /**
      * 判断字符串中是否包含汉语拼音声调字符（排除英文 IPA 音标）
      */
     fun containsPinyinTone(text: String): Boolean {
+        if (text.isBlank()) return false
+        // 具备二三四声或 ü 声调的必为汉语拼音
+        if (PINYIN_DISTINCTIVE_TONE_REGEX.containsMatchIn(text)) return true
+        // 若包含 IPA 专属符号，排除在拼音之外
         if (IPA_MARKER_REGEX.containsMatchIn(text)) return false
-        return PINYIN_TONE_REGEX.containsMatchIn(text)
+        return ALL_PINYIN_TONE_REGEX.containsMatchIn(text)
     }
 
     /**
      * 将英文音标格式化为标准优雅的 IPA 格式（如 [həˈloʊ] 或 /həˈloʊ/）
-     * 若已包含方括号或斜杠，则保持原样；若为拼音则不包裹方括号
+     * 若已包含方括号或斜杠，则保持原样；若为拼音或无效内容则不作为英文音标处理（返回 null）
      */
     fun formatIpaPhonetic(phonetic: String?, isEnglish: Boolean = true): String? {
         val trimmed = phonetic?.trim() ?: return null
         if (trimmed.isEmpty()) return null
 
+        // 若要求英文音标，但文本包含拼音声调且无英文音标特征，则拒绝作为英文音标
+        if (isEnglish) {
+            if (containsPinyinTone(trimmed) && !isLikelyEnglishPhonetic(trimmed)) {
+                return null
+            }
+            if (LanguageDetector.containsChinese(trimmed)) {
+                return null
+            }
+        }
+
         if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed
         if (trimmed.startsWith("/") && trimmed.endsWith("/")) return trimmed
 
-        // 若包含中文拼音声调，且非英文音标，不包裹方括号
-        if (containsPinyinTone(trimmed) && !isLikelyEnglishPhonetic(trimmed)) {
+        // 若不是英文，直接返回原字符串（如拼音不加括号）
+        if (!isEnglish) {
             return trimmed
         }
 
-        return if (isEnglish) "[$trimmed]" else trimmed
+        return "[$trimmed]"
     }
 
     /**
@@ -79,57 +113,63 @@ object PhoneticHelper {
                 // 音标通常出现在 subArray[0] 为 null，或子数组 index 2/3 有值的元素中
                 if (subArray.size() > 2 && !subArray.get(2).isJsonNull) {
                     val s = subArray.get(2).asString.trim()
-                    if (s.isNotEmpty()) candidate2 = s
+                    if (s.isNotEmpty() && !LanguageDetector.containsChinese(s)) candidate2 = s
                 }
                 if (subArray.size() > 3 && !subArray.get(3).isJsonNull) {
                     val s = subArray.get(3).asString.trim()
-                    if (s.isNotEmpty()) candidate3 = s
+                    if (s.isNotEmpty() && !LanguageDetector.containsChinese(s)) candidate3 = s
                 }
             }
         }
 
         if (candidate2 == null && candidate3 == null) return null
-        if (candidate2 != null && candidate3 == null) {
-            return formatIfTargetEnglish(candidate2, targetLang)
-        }
-        if (candidate2 == null && candidate3 != null) {
-            return formatIfTargetEnglish(candidate3, targetLang)
-        }
-
-        val nonNull2 = candidate2!!
-        val nonNull3 = candidate3!!
 
         val isTargetEn = targetLang.code.startsWith("en", ignoreCase = true)
         val isTargetZh = targetLang.code.startsWith("zh", ignoreCase = true)
 
-        val selected = when {
-            isTargetEn -> {
-                val is2En = isLikelyEnglishPhonetic(nonNull2)
-                val is3En = isLikelyEnglishPhonetic(nonNull3)
-                if (is2En && !is3En) nonNull2
-                else if (!is2En && is3En) nonNull3
-                else if (containsPinyinTone(nonNull2) && !containsPinyinTone(nonNull3)) nonNull3
-                else nonNull2
-            }
-            isTargetZh -> {
-                val is2Pinyin = containsPinyinTone(nonNull2)
-                val is3Pinyin = containsPinyinTone(nonNull3)
-                if (is2Pinyin && !is3Pinyin) nonNull2
-                else if (!is2Pinyin && is3Pinyin) nonNull3
-                else nonNull2
-            }
-            else -> nonNull2
-        }
+        if (isTargetEn) {
+            // 目标语言为英文：必须提取合法的英文音标，严禁将中文拼音错当英文音标
+            val is2En = candidate2?.let { isLikelyEnglishPhonetic(it) } ?: false
+            val is3En = candidate3?.let { isLikelyEnglishPhonetic(it) } ?: false
 
-        return formatIfTargetEnglish(selected, targetLang)
+            val selectedEnglish = when {
+                is2En && !is3En -> candidate2
+                !is2En && is3En -> candidate3
+                is2En && is3En -> candidate3 ?: candidate2
+                candidate2 != null && !containsPinyinTone(candidate2) -> candidate2
+                candidate3 != null && !containsPinyinTone(candidate3) -> candidate3
+                else -> null // 两者皆为拼音或无效，拒绝作为英文音标返回，交由词典极速补充
+            }
+
+            return selectedEnglish?.let { formatIpaPhonetic(it, true) }
+        } else if (isTargetZh) {
+            // 目标语言为中文：优先提取汉语拼音，绝不在中文译文下展示英文音标
+            val is2Pinyin = candidate2?.let { containsPinyinTone(it) } ?: false
+            val is3Pinyin = candidate3?.let { containsPinyinTone(it) } ?: false
+
+            val selectedPinyin = when {
+                is2Pinyin && !is3Pinyin -> candidate2
+                !is2Pinyin && is3Pinyin -> candidate3
+                is2Pinyin && is3Pinyin -> candidate2
+                candidate2 != null && !isLikelyEnglishPhonetic(candidate2) -> candidate2
+                candidate3 != null && !isLikelyEnglishPhonetic(candidate3) -> candidate3
+                else -> null
+            }
+            return selectedPinyin
+        } else {
+            // 其他语言
+            val chosen = candidate2 ?: candidate3 ?: return null
+            return formatIfTargetEnglish(chosen, targetLang)
+        }
     }
 
-    private fun formatIfTargetEnglish(phonetic: String, targetLang: Language): String {
-        return if (targetLang.code.startsWith("en", ignoreCase = true) && !containsPinyinTone(phonetic)) {
-            formatIpaPhonetic(phonetic, true) ?: phonetic
-        } else {
-            phonetic
+    private fun formatIfTargetEnglish(phonetic: String, targetLang: Language): String? {
+        val isTargetEn = targetLang.code.startsWith("en", ignoreCase = true)
+        if (isTargetEn) {
+            if (containsPinyinTone(phonetic) && !isLikelyEnglishPhonetic(phonetic)) return null
+            return formatIpaPhonetic(phonetic, true)
         }
+        return phonetic
     }
 
     /**
@@ -139,7 +179,7 @@ object PhoneticHelper {
         return try {
             val root = JsonParser.parseString(jsonString).asJsonObject
 
-            // 1. 优先从 simple.word 中获取
+            // 1. 优先从 simple.word 中获取 (兼容 usphone, ukphone, phone)
             if (root.has("simple") && root.get("simple").isJsonObject) {
                 val simpleObj = root.getAsJsonObject("simple")
                 if (simpleObj.has("word") && simpleObj.get("word").isJsonArray) {
@@ -148,7 +188,10 @@ object PhoneticHelper {
                         val wordObj = wordArray.get(0).asJsonObject
                         val usphone = wordObj.get("usphone")?.takeIf { !it.isJsonNull }?.asString?.trim()
                         val ukphone = wordObj.get("ukphone")?.takeIf { !it.isJsonNull }?.asString?.trim()
-                        val phone = usphone?.takeIf { it.isNotEmpty() } ?: ukphone?.takeIf { it.isNotEmpty() }
+                        val phoneField = wordObj.get("phone")?.takeIf { !it.isJsonNull }?.asString?.trim()
+                        val phone = usphone?.takeIf { it.isNotEmpty() }
+                            ?: ukphone?.takeIf { it.isNotEmpty() }
+                            ?: phoneField?.takeIf { it.isNotEmpty() }
                         if (!phone.isNullOrEmpty()) {
                             return formatIpaPhonetic(phone, true)
                         }
@@ -156,7 +199,7 @@ object PhoneticHelper {
                 }
             }
 
-            // 2. 兜底从 ec.word 中获取
+            // 2. 兜底从 ec.word 中获取 (兼容 usphone, ukphone, phone)
             if (root.has("ec") && root.get("ec").isJsonObject) {
                 val ecObj = root.getAsJsonObject("ec")
                 if (ecObj.has("word") && ecObj.get("word").isJsonArray) {
@@ -165,7 +208,10 @@ object PhoneticHelper {
                         val wordObj = wordArray.get(0).asJsonObject
                         val usphone = wordObj.get("usphone")?.takeIf { !it.isJsonNull }?.asString?.trim()
                         val ukphone = wordObj.get("ukphone")?.takeIf { !it.isJsonNull }?.asString?.trim()
-                        val phone = usphone?.takeIf { it.isNotEmpty() } ?: ukphone?.takeIf { it.isNotEmpty() }
+                        val phoneField = wordObj.get("phone")?.takeIf { !it.isJsonNull }?.asString?.trim()
+                        val phone = usphone?.takeIf { it.isNotEmpty() }
+                            ?: ukphone?.takeIf { it.isNotEmpty() }
+                            ?: phoneField?.takeIf { it.isNotEmpty() }
                         if (!phone.isNullOrEmpty()) {
                             return formatIpaPhonetic(phone, true)
                         }
@@ -193,7 +239,11 @@ object PhoneticHelper {
         val words = trimmed.split(Regex("\\s+"))
         if (words.size > 4) return null
 
-        val cleanQuery = trimmed.trim('\"', '\'', '.', '!', '?', ',', ';')
+        // 清洗首尾与内部标点符号（如末尾标点、中间逗号/分号等），但保留单词内部撇号与连字符（如 don't, ice-cream）
+        val cleanQuery = trimmed
+            .replace(Regex("[^a-zA-Z0-9'\\-\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
         if (cleanQuery.isEmpty()) return null
 
         val cacheKey = cleanQuery.lowercase()

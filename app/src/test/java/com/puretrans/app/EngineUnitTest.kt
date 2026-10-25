@@ -648,5 +648,62 @@ class EngineUnitTest {
         assertNull(com.puretrans.app.util.PhoneticHelper.parseYoudaoPhoneticJson("{}"))
         assertNull(com.puretrans.app.util.PhoneticHelper.parseYoudaoPhoneticJson("invalid json"))
     }
+
+    @Test
+    fun testGtxExtractPhonetic_TargetEnglish_OnlyPinyin_ReturnsNullForFallback() {
+        // 源语言为中文，目标为英文，但 gtx 仅返回了源语言拼音（无英文音标）
+        val jsonMockOnlyPinyin = """
+            [[["Hello","你好",null,null,1],[null,null,"Nǐ hǎo"]],null,"zh-CN"]
+        """.trimIndent()
+        val rootArray = JsonParser.parseString(jsonMockOnlyPinyin).asJsonArray
+        val extracted = com.puretrans.app.util.PhoneticHelper.extractGtxPhonetic(rootArray, Language.EN)
+        // 关键断言：绝不能把中文拼音当作英文音标返回，必须为 null 以便触发词典补充
+        assertNull(extracted)
+    }
+
+    @Test
+    fun testGtxExtractPhonetic_TargetChinese_OnlyEnglishPhonetic_ReturnsNull() {
+        // 源语言为英文，目标为中文，但 gtx 仅返回了英文音标（无中文拼音）
+        val jsonMockOnlyEnglish = """
+            [[["你好","Hello",null,null,1],[null,null,null,"[həˈloʊ]"]],null,"en"]
+        """.trimIndent()
+        val rootArray = JsonParser.parseString(jsonMockOnlyEnglish).asJsonArray
+        val extracted = com.puretrans.app.util.PhoneticHelper.extractGtxPhonetic(rootArray, Language.ZH)
+        // 关键断言：绝不能把英文音标当作中文译文的拼音返回
+        assertNull(extracted)
+    }
+
+    @Test
+    fun testEnglishPhoneticWithMacronAndToneDistinction() {
+        // 英文长元音宏音符 (如 hōm, ɡō, sē) 应被识别为英文音标转写
+        assertTrue(com.puretrans.app.util.PhoneticHelper.isLikelyEnglishPhonetic("hōm"))
+        assertTrue(com.puretrans.app.util.PhoneticHelper.isLikelyEnglishPhonetic("ɡō"))
+
+        // 汉语拼音特有声调（二三四声）绝对不能被识别为英文音标
+        assertFalse(com.puretrans.app.util.PhoneticHelper.isLikelyEnglishPhonetic("píng"))
+        assertFalse(com.puretrans.app.util.PhoneticHelper.isLikelyEnglishPhonetic("guǒ"))
+        assertFalse(com.puretrans.app.util.PhoneticHelper.isLikelyEnglishPhonetic("nǐ"))
+
+        // formatIpaPhonetic 在要求英文时，若传入拼音，应直接拒绝返回 null
+        assertNull(com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic("píngguǒ", true))
+        assertNull(com.puretrans.app.util.PhoneticHelper.formatIpaPhonetic("Nǐ hǎo", true))
+    }
+
+    @Test
+    fun testParseYoudaoPhonetic_FallbackToPhoneField() {
+        val jsonPhoneOnly = """
+            {
+              "simple": {
+                "word": [
+                  {
+                    "phone": "kəmˈpjuːtər"
+                  }
+                ]
+              }
+            }
+        """.trimIndent()
+        val parsed = com.puretrans.app.util.PhoneticHelper.parseYoudaoPhoneticJson(jsonPhoneOnly)
+        assertEquals("[kəmˈpjuːtər]", parsed)
+    }
 }
 
