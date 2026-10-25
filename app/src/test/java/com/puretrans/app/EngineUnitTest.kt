@@ -412,4 +412,146 @@ class EngineUnitTest {
         assertTrue(longCandidates[0].contains("text=" + "a".repeat(250)))
         assertFalse(longCandidates[0].contains("text=" + "a".repeat(251)))
     }
+
+    @Test
+    fun testSemanticSegmentSplittingWithColumnGap() {
+        // 模拟用户截图场景：左侧命令名 teamwork 与右侧描述 Invoke a team of agents...
+        // teamwork: [100, 200, 220, 230], width=120, height=30
+        // Invoke: [450, 200, 520, 230], width=70, height=30. gap = 450 - 220 = 230 > 30 * 0.75
+        // a: [530, 200, 545, 230], width=15, height=30. gap = 10 < 30 * 0.75
+        // team: [555, 200, 610, 230], width=55, height=30. gap = 10 < 30 * 0.75
+        val elements = listOf(
+            com.puretrans.app.ui.image.ImageTranslateProcessor.SimpleElement("teamwork", 100, 200, 220, 230),
+            com.puretrans.app.ui.image.ImageTranslateProcessor.SimpleElement("Invoke", 450, 200, 520, 230),
+            com.puretrans.app.ui.image.ImageTranslateProcessor.SimpleElement("a", 530, 200, 545, 230),
+            com.puretrans.app.ui.image.ImageTranslateProcessor.SimpleElement("team", 555, 200, 610, 230)
+        )
+
+        val segments = com.puretrans.app.ui.image.ImageTranslateProcessor.splitSimpleElements(
+            elements = elements,
+            fallbackText = "teamwork Invoke a team",
+            fallbackLeft = 100,
+            fallbackTop = 200,
+            fallbackRight = 610,
+            fallbackBottom = 230
+        )
+
+        assertEquals("必须精准切分为 2 个独立片段（左命令 vs 右描述）", 2, segments.size)
+
+        // 片段 1: 左侧命令 teamwork
+        val seg1 = segments[0]
+        assertEquals("teamwork", seg1.text)
+        assertEquals(100, seg1.left)
+        assertEquals(220, seg1.right)
+        assertEquals(120, seg1.width)
+
+        // 片段 2: 右侧描述 Invoke a team
+        val seg2 = segments[1]
+        assertEquals("Invoke a team", seg2.text)
+        assertEquals(450, seg2.left)
+        assertEquals(610, seg2.right)
+        assertEquals(160, seg2.width)
+
+        // 验证中间留白 gap 完全被排除在外 (220 到 450 之间为 230 像素真实留白，不会被遮罩抹平)
+        assertTrue(seg2.left - seg1.right >= 230)
+    }
+
+    @Test
+    fun testNormalWordGapNotSplit() {
+        // 普通英文句子，单词间距正常（gap 为 8~12 像素），不得误拆分
+        val elements = listOf(
+            com.puretrans.app.ui.image.ImageTranslateProcessor.SimpleElement("Hello", 50, 100, 110, 130),
+            com.puretrans.app.ui.image.ImageTranslateProcessor.SimpleElement("world", 120, 100, 180, 130),
+            com.puretrans.app.ui.image.ImageTranslateProcessor.SimpleElement("again", 190, 100, 250, 130)
+        )
+
+        val segments = com.puretrans.app.ui.image.ImageTranslateProcessor.splitSimpleElements(
+            elements = elements,
+            fallbackText = "Hello world again",
+            fallbackLeft = 50,
+            fallbackTop = 100,
+            fallbackRight = 250,
+            fallbackBottom = 130
+        )
+
+        assertEquals("普通词距应保持为 1 个完整段落", 1, segments.size)
+        assertEquals("Hello world again", segments[0].text)
+        assertEquals(50, segments[0].left)
+        assertEquals(250, segments[0].right)
+    }
+
+    @Test
+    fun testMultiColumnSplit() {
+        // 3 列表格或排版场景：命令 | 参数 | 描述
+        val elements = listOf(
+            com.puretrans.app.ui.image.ImageTranslateProcessor.SimpleElement("boost", 50, 50, 120, 80),
+            com.puretrans.app.ui.image.ImageTranslateProcessor.SimpleElement("--fast", 300, 50, 380, 80),
+            com.puretrans.app.ui.image.ImageTranslateProcessor.SimpleElement("Run immediately", 550, 50, 750, 80)
+        )
+
+        val segments = com.puretrans.app.ui.image.ImageTranslateProcessor.splitSimpleElements(
+            elements = elements,
+            fallbackText = "boost --fast Run immediately",
+            fallbackLeft = 50,
+            fallbackTop = 50,
+            fallbackRight = 750,
+            fallbackBottom = 80
+        )
+
+        assertEquals(3, segments.size)
+        assertEquals("boost", segments[0].text)
+        assertEquals("--fast", segments[1].text)
+        assertEquals("Run immediately", segments[2].text)
+    }
+
+    @Test
+    fun testEmptyOrFallbackElements() {
+        // 空 elements 列表应平稳使用 fallback
+        val emptySegments = com.puretrans.app.ui.image.ImageTranslateProcessor.splitSimpleElements(
+            elements = emptyList(),
+            fallbackText = "Fallback Text",
+            fallbackLeft = 10,
+            fallbackTop = 20,
+            fallbackRight = 100,
+            fallbackBottom = 40
+        )
+        assertEquals(1, emptySegments.size)
+        assertEquals("Fallback Text", emptySegments[0].text)
+        assertEquals(90, emptySegments[0].width)
+
+        // 全部空白 elements
+        val blankSegments = com.puretrans.app.ui.image.ImageTranslateProcessor.splitSimpleElements(
+            elements = listOf(com.puretrans.app.ui.image.ImageTranslateProcessor.SimpleElement("   ", 10, 20, 30, 40)),
+            fallbackText = "Fallback",
+            fallbackLeft = 10,
+            fallbackTop = 20,
+            fallbackRight = 50,
+            fallbackBottom = 40
+        )
+        assertEquals(1, blankSegments.size)
+        assertEquals("Fallback", blankSegments[0].text)
+    }
+
+    @Test
+    fun testCompactMaskWidthCalculation() {
+        // 1. 译文所需宽度小于原词框：根据较小合理外接矩形收紧遮罩，但不低于 75% 保底
+        val boxWidth = 500f
+        val textNeededShort = 300f
+        val maskShort = com.puretrans.app.ui.image.ImageOverlayRenderer.computeMaskWidth(boxWidth, textNeededShort)
+        assertEquals(375f, maskShort, 0.1f) // 500 * 0.75f = 375f
+
+        val textNeededMedium = 420f
+        val maskMedium = com.puretrans.app.ui.image.ImageOverlayRenderer.computeMaskWidth(boxWidth, textNeededMedium)
+        assertEquals(420f, maskMedium, 0.1f) // 420f 介于 375f 和 500f 之间
+
+        // 2. 译文所需宽度超出原词框：严禁无限拉长，必须被 boxWidth 严格约束截断
+        val textNeededLong = 700f
+        val maskLong = com.puretrans.app.ui.image.ImageOverlayRenderer.computeMaskWidth(boxWidth, textNeededLong)
+        assertEquals(500f, maskLong, 0.1f)
+
+        // 3. 边界值
+        assertEquals(0f, com.puretrans.app.ui.image.ImageOverlayRenderer.computeMaskWidth(0f, 100f), 0.1f)
+        assertEquals(100f, com.puretrans.app.ui.image.ImageOverlayRenderer.computeMaskWidth(100f, 0f), 0.1f)
+    }
 }
+

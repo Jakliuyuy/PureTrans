@@ -5,16 +5,18 @@ import android.graphics.Color
 import android.graphics.Rect
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.puretrans.app.data.engine.SmartTranslationRouter
 import com.puretrans.app.data.model.Language
-import com.puretrans.app.util.LanguageDetector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * 图像 OCR 识别与 1:1 原位覆盖处理核心引擎
@@ -29,7 +31,104 @@ object ImageTranslateProcessor {
     )
 
     /**
-     * 对传入图片执行 OCR，提取文字与原图像素位置矩形
+     * 抽象的轻量视觉元素模型，解耦 Android Framework 便于全面单元测试
+     */
+    data class SimpleElement(
+        val text: String,
+        val left: Int,
+        val top: Int,
+        val right: Int,
+        val bottom: Int
+    ) {
+        val width: Int get() = right - left
+        val height: Int get() = bottom - top
+    }
+
+    /**
+     * 细粒度语义片段模型（如左侧命令 vs 右侧描述）
+     */
+    data class SimpleSegment(
+        val text: String,
+        val left: Int,
+        val top: Int,
+        val right: Int,
+        val bottom: Int
+    ) {
+        val width: Int get() = right - left
+        val height: Int get() = bottom - top
+    }
+
+    /**
+     * 将单行中的元素根据水平间距 (gap) 进行细粒度语义分段拆分
+     * 避免整行粗暴合并为一个大长条矩形，保留行内留白与独立列排版
+     */
+    fun splitSimpleElements(
+        elements: List<SimpleElement>,
+        fallbackText: String,
+        fallbackLeft: Int,
+        fallbackTop: Int,
+        fallbackRight: Int,
+        fallbackBottom: Int
+    ): List<SimpleSegment> {
+        val validElements = elements.filter { it.text.isNotBlank() && it.width > 0 && it.height > 0 }
+        if (validElements.isEmpty()) {
+            return if (fallbackText.isNotBlank() && fallbackRight > fallbackLeft && fallbackBottom > fallbackTop) {
+                listOf(SimpleSegment(fallbackText.trim(), fallbackLeft, fallbackTop, fallbackRight, fallbackBottom))
+            } else {
+                emptyList()
+            }
+        }
+
+        // 按水平位置从左至右排序
+        val sorted = validElements.sortedBy { it.left }
+        val segments = mutableListOf<MutableList<SimpleElement>>()
+        var currentSegment = mutableListOf<SimpleElement>()
+
+        for (elem in sorted) {
+            if (currentSegment.isEmpty()) {
+                currentSegment.add(elem)
+            } else {
+                val prevElem = currentSegment.last()
+                val gap = elem.left - prevElem.right
+                val refHeight = max(prevElem.height, elem.height)
+                // 当水平间隙明显大于正常词间距时切分（例如 gap > refHeight * 0.75 且 gap > 10 像素）
+                val isSplit = gap > refHeight * 0.75f && gap > 10
+
+                if (isSplit) {
+                    segments.add(currentSegment)
+                    currentSegment = mutableListOf(elem)
+                } else {
+                    currentSegment.add(elem)
+                }
+            }
+        }
+        if (currentSegment.isNotEmpty()) {
+            segments.add(currentSegment)
+        }
+
+        return segments.mapNotNull { seg ->
+            if (seg.isEmpty()) return@mapNotNull null
+            val segText = seg.joinToString(" ") { it.text.trim() }.trim()
+            if (segText.isEmpty()) return@mapNotNull null
+
+            var sLeft = Int.MAX_VALUE
+            var sTop = Int.MAX_VALUE
+            var sRight = Int.MIN_VALUE
+            var sBottom = Int.MIN_VALUE
+
+            for (e in seg) {
+                if (e.left < sLeft) sLeft = e.left
+                if (e.top < sTop) sTop = e.top
+                if (e.right > sRight) sRight = e.right
+                if (e.bottom > sBottom) sBottom = e.bottom
+            }
+
+            if (sRight <= sLeft || sBottom <= sTop) null else SimpleSegment(segText, sLeft, sTop, sRight, sBottom)
+        }
+    }
+
+    /**
+     * 对传入图片执行 OCR，提取细粒度文字片段与紧凑贴合的原图像素位置矩形
      */
     suspend fun recognizeText(bitmap: Bitmap): List<RawOcrItem> = withContext(Dispatchers.IO) {
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
@@ -41,27 +140,48 @@ object ImageTranslateProcessor {
         for (block in visionText.textBlocks) {
             for (line in block.lines) {
                 val box = line.boundingBox ?: continue
-                val text = line.text.trim()
-                if (text.isEmpty()) continue
+                val lineText = line.text.trim()
+                if (lineText.isEmpty()) continue
 
-                // 规范化矩形边界，防止越界
-                val safeRect = Rect(
-                    box.left.coerceIn(0, bitmap.width),
-                    box.top.coerceIn(0, bitmap.height),
-                    box.right.coerceIn(0, bitmap.width),
-                    box.bottom.coerceIn(0, bitmap.height)
+                // 转换 elements
+                val simpleElements = line.elements.mapNotNull { elem ->
+                    val eb = elem.boundingBox ?: return@mapNotNull null
+                    val t = elem.text.trim()
+                    if (t.isEmpty()) return@mapNotNull null
+                    SimpleElement(t, eb.left, eb.top, eb.right, eb.bottom)
+                }
+
+                // 细粒度视觉文本块拆分（Line -> Semantic Segments）
+                val segments = splitSimpleElements(
+                    elements = simpleElements,
+                    fallbackText = lineText,
+                    fallbackLeft = box.left,
+                    fallbackTop = box.top,
+                    fallbackRight = box.right,
+                    fallbackBottom = box.bottom
                 )
 
-                if (safeRect.width() > 4 && safeRect.height() > 4) {
-                    val (bgColor, textColor) = sampleColors(bitmap, safeRect)
-                    results.add(
-                        RawOcrItem(
-                            originalText = text,
-                            rect = safeRect,
-                            dominantBgColor = bgColor,
-                            textColor = textColor
-                        )
+                for (seg in segments) {
+                    // 规范化矩形边界，防止越界，并保持紧凑贴合
+                    val safeRect = Rect(
+                        seg.left.coerceIn(0, bitmap.width),
+                        seg.top.coerceIn(0, bitmap.height),
+                        seg.right.coerceIn(0, bitmap.width),
+                        seg.bottom.coerceIn(0, bitmap.height)
                     )
+
+                    if (safeRect.width() > 4 && safeRect.height() > 4) {
+                        // 针对不同细分块分别提取各自局部的真实背景色与文字色
+                        val (bgColor, textColor) = sampleColors(bitmap, safeRect)
+                        results.add(
+                            RawOcrItem(
+                                originalText = seg.text,
+                                rect = safeRect,
+                                dominantBgColor = bgColor,
+                                textColor = textColor
+                            )
+                        )
+                    }
                 }
             }
         }
@@ -71,7 +191,7 @@ object ImageTranslateProcessor {
     /**
      * 智能采样文字周围边缘背景色与适配文字色
      */
-    private fun sampleColors(bitmap: Bitmap, rect: Rect): Pair<Int, Int> {
+    fun sampleColors(bitmap: Bitmap, rect: Rect): Pair<Int, Int> {
         var rSum = 0L
         var gSum = 0L
         var bSum = 0L
